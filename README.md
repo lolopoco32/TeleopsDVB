@@ -10,7 +10,6 @@
 * **Customizable Settings:** Preserves window geometry, volume levels, scroll positions, and provides quick access to advanced `mpv.conf` configurations
 
 ## Requirements
-* Python 3 & PyQt6
 * `mpv` player (or the Flatpak version `io.mpv.Mpv`)
 * `dvb-tools` (`dvbv5-scan`, `dvbv5-zap`)
 
