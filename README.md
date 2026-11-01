@@ -1,73 +1,69 @@
 # Teleops DVB 📺
 
-**Teleops DVB** is a Python desktop application (using Tkinter) designed for watching and recording TV and Radio channels via DVB tuners (DVB-C and DVB-T/T2). The application uses `dvb-tools` for frequency tuning and `mpv` as the media player engine.
+**Teleops DVB** is a lightweight Python desktop application (built with Tkinter) designed for watching and recording DVB-C (Cable) and DVB-T/T2 (Terrestrial) TV and radio channels. It leverages `dvb-tools` for tuning and scanning, and **MPV** as the underlying playback engine, featuring full EPG (TV Guide) support and DVB subtitles.
+
+---
 
 ## 🌟 Features
 
-* **Automatic Scanning:** Supports DVB-C (Cable) and DVB-T/T2 (Terrestrial) channel scanning.
+- 📡 **Automatic Channel Scanning:** Supports DVB-C (Cable) and DVB-T/T2 (Terrestrial) channel discovery.
+- 📺 **MPV Player Integration:** High-performance video and audio playback via IPC socket control.
+- 📋 **Live EPG (TV Guide):** Real-time display of current and upcoming programs with progress bars on the MPV OSD, plus a dedicated full guide window.
+- 🔴 **Stream Recording:** Record live TV streams directly to `.ts` files.
+- 💬 **DVB Subtitles:** Full support for DVB stream subtitles (including external/non-embedded streams).
+- ⭐ **Favorites & Search:** Organize channels into TV, Radio, and Favorites with an instant search filter.
+- 🌍 **Multilingual:** Built-in interface support for Romanian, English, and Italian.
 
-* **TV Guide (EPG):** Displays current and upcoming program details (with a progress bar on the MPV OSD) + a dedicated window showing full show descriptions.
+---
 
-* **DVB Subtitles:** Support for full DVB stream subtitles (including external/non-embedded streams).
+## 🛠️ System Requirements & Dependencies
 
-* **Recording:** Stream TV channels directly to `.ts` files.
+The application runs on Linux distributions (Ubuntu, Debian, Linux Mint, Arch, etc.).
 
-* **Favorites & Search:** Easily organize channels into TV, Radio, and Favorites, with a built-in search bar.
-
-* **Multilingual:** Includes interface support for Romanian, English, and Italian.
-
-## 🛠️ Prerequisites & Dependencies
-
-The application runs on Linux distributions (Ubuntu, Debian, Linux Mint, etc.).
-
-To install the required dependencies, run the following command in your terminal:
+Install the required dependencies on Debian/Ubuntu using:
 
 ```bash
 sudo apt update
 sudo apt install python3-tk mpv dvb-tools
 ```
 
-*(Optional: If you use `mpv` via Flatpak, the application will automatically detect and use it).*
+*(Note: MPV installed via Flatpak `io.mpv.Mpv` is also automatically detected).*
 
-## 🚀 Getting Started
+---
 
-1. Clone or download this repository:
+## 🚀 Installation & Usage
 
-   ```bash
-   git clone https://github.com/lolopoco32/TeleopsDVB.git
-   cd TeleopsDVB
-   ```
+You don't need advanced Git skills to run this application. You can download and run it directly:
 
-2. Make the script executable:
-
-   ```bash
-   chmod +x teleops.py
-   ```
-
-3. Launch the application:
-
-   ```bash
-   ./teleops.py
-   ```
-
-   *or*
-
+### Option A: Direct Download (ZIP)
+1. Click the green **Code** button at the top of this repository page and select **Download ZIP**.
+2. Extract the ZIP archive on your computer.
+3. Open a terminal inside the extracted folder.
+4. Run the script:
    ```bash
    python3 teleops.py
    ```
 
+### Option B: Using Git
+```bash
+git clone https://github.com/lolopoco32/TeleopsDVB.git
+cd TeleopsDVB
+chmod +x teleops.py
+./teleops.py
+```
+
+---
+
 ## ⌨️ Hotkeys & Shortcuts
 
-* `CTRL + i` — Show OSD with current EPG info inside the MPV player window.
+- **`CTRL + i`** — Show OSD with current program / EPG info inside the MPV player window.
+- **`Right Click on channel list`** — Toggle the search bar visibility.
+- **`CTRL + Left Click on channel`** — Add or remove a channel from Favorites.
+- **`Double Click / Enter`** — Tune to the selected channel.
+- **`Click on main title ("Teleops DVB")`** — Toggle settings and tuner configuration panel.
 
-* `Right Click on list` — Toggle the search bar visibility.
-
-* `CTRL + Left Click on channel` — Add or remove a channel from your Favorites.
-
-* `Double Click / Enter` — Tune to the selected channel.
-
-* `Click on title ("Teleops DVB")` — Toggle settings and tuner configuration panel.
+---
 
 ## 📄 License
 
-This project is licensed under the MIT License. Feel free to contribute or modify!
+This project is open-source and available for personal use, modification, and distribution under the MIT License.
