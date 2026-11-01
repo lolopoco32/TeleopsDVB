@@ -1,6 +1,6 @@
 # Teleops DVB
 
-**Teleops DVB** is a modern PyQt6-based application for Linux designed to scan, stream, and record DVB-C (Cable) and DVB-T/T2 (Terrestrial) digital television broadcasts using standard `dvb-tools` and `mpv`
+**Teleops DVB** is a modern Tkinter-based application for Linux designed to scan, stream, and record DVB-C (Cable) and DVB-T/T2 (Terrestrial) digital television broadcasts using standard `dvb-tools` and `mpv`
 
 ## Key Features
 * **Multi-Frontend Support:** Interfaces with DVB adapters and frontends for cable and terrestrial scanning (`dvbv5-scan`, `dvbv5-zap`)
