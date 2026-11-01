@@ -1,17 +1,73 @@
-# Teleops DVB
+# Teleops DVB 📺
 
-**Teleops DVB** is a modern Tkinter-based application for Linux designed to scan, stream, and record DVB-C (Cable) and DVB-T/T2 (Terrestrial) digital television broadcasts using standard `dvb-tools` and `mpv`
+**Teleops DVB** is a Python desktop application (using Tkinter) designed for watching and recording TV and Radio channels via DVB tuners (DVB-C and DVB-T/T2). The application uses `dvb-tools` for frequency tuning and `mpv` as the media player engine.
 
-## Key Features
-* **Multi-Frontend Support:** Interfaces with DVB adapters and frontends for cable and terrestrial scanning (`dvbv5-scan`, `dvbv5-zap`)
-* **Integrated Video Playback:** Streams television channels directly through a controlled `mpv` instance with high-quality video profiles and automatic DVB/Teletext subtitle selection
-* **Stream Recording:** Allows real-time recording of live broadcasts directly into timestamped `.ts` files inside the user's `Videos` directory
-* **Multilingual Interface:** Built-in localization support for Romanian, English, and Italian
-* **Customizable Settings:** Preserves window geometry, volume levels, scroll positions, and provides quick access to advanced `mpv.conf` configurations
+## 🌟 Features
 
-## Requirements
-* `mpv` player (or the Flatpak version `io.mpv.Mpv`)
-* `dvb-tools` (`dvbv5-scan`, `dvbv5-zap`)
+* **Automatic Scanning:** Supports DVB-C (Cable) and DVB-T/T2 (Terrestrial) channel scanning.
 
-<img width="450" height="1198" alt="Screenshot_20261101_070240" src="https://github.com/user-attachments/assets/ff4b3f2d-1e95-462b-a7a3-b4e427c9c6e0" />
-<img width="2243" height="1083" alt="Screenshot_20261101_070422" src="https://github.com/user-attachments/assets/152aecb0-4dc4-4646-8306-78929801441e" />
+* **TV Guide (EPG):** Displays current and upcoming program details (with a progress bar on the MPV OSD) + a dedicated window showing full show descriptions.
+
+* **DVB Subtitles:** Support for full DVB stream subtitles (including external/non-embedded streams).
+
+* **Recording:** Stream TV channels directly to `.ts` files.
+
+* **Favorites & Search:** Easily organize channels into TV, Radio, and Favorites, with a built-in search bar.
+
+* **Multilingual:** Includes interface support for Romanian, English, and Italian.
+
+## 🛠️ Prerequisites & Dependencies
+
+The application runs on Linux distributions (Ubuntu, Debian, Linux Mint, etc.).
+
+To install the required dependencies, run the following command in your terminal:
+
+```bash
+sudo apt update
+sudo apt install python3-tk mpv dvb-tools
+```
+
+*(Optional: If you use `mpv` via Flatpak, the application will automatically detect and use it).*
+
+## 🚀 Getting Started
+
+1. Clone or download this repository:
+
+   ```bash
+   git clone https://github.com/YOUR-USERNAME/YOUR-REPOSITORY.git
+   cd YOUR-REPOSITORY
+   ```
+
+2. Make the script executable:
+
+   ```bash
+   chmod +x teleops.py
+   ```
+
+3. Launch the application:
+
+   ```bash
+   ./teleops.py
+   ```
+
+   *or*
+
+   ```bash
+   python3 teleops.py
+   ```
+
+## ⌨️ Hotkeys & Shortcuts
+
+* `CTRL + i` — Show OSD with current EPG info inside the MPV player window.
+
+* `Right Click on list` — Toggle the search bar visibility.
+
+* `CTRL + Left Click on channel` — Add or remove a channel from your Favorites.
+
+* `Double Click / Enter` — Tune to the selected channel.
+
+* `Click on title ("Teleops DVB")` — Toggle settings and tuner configuration panel.
+
+## 📄 License
+
+This project is licensed under the MIT License. Feel free to contribute or modify!
