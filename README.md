@@ -14,5 +14,5 @@
 * `mpv` player (or the Flatpak version `io.mpv.Mpv`)
 * `dvb-tools` (`dvbv5-scan`, `dvbv5-zap`)
 
-<img width="450" height="1045" alt="Screenshot_20261017_161117" src="https://github.com/user-attachments/assets/28dcce0d-dda7-461e-834b-1466bc31bee7" />
-<img width="2254" height="1090" alt="Screenshot_20261017_161035" src="https://github.com/user-attachments/assets/2fe88e71-d64a-4ead-9ae8-57782600ca2b" />
+<img width="450" height="1198" alt="Screenshot_20261101_070240" src="https://github.com/user-attachments/assets/ff4b3f2d-1e95-462b-a7a3-b4e427c9c6e0" />
+<img width="2243" height="1083" alt="Screenshot_20261101_070422" src="https://github.com/user-attachments/assets/152aecb0-4dc4-4646-8306-78929801441e" />
