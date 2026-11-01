@@ -35,7 +35,7 @@ sudo apt install python3-tk mpv dvb-tools
 
    ```bash
    git clone https://github.com/lolopoco32/TeleopsDVB.git
-cd TeleopsDVB
+   cd TeleopsDVB
    ```
 
 2. Make the script executable:
