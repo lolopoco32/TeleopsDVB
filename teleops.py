@@ -2,7 +2,7 @@
 """Teleops DVB - Tkinter + mpv + dvbv5-zap, cu EPG și subtitrări DVB (nu doar cele embedded).
 Dependențe: python3-tk, mpv (sau io.mpv.Mpv Flatpak), dvb-tools (dvbv5-scan, dvbv5-zap, dvb-fe-tool)
 """
-import configparser, functools, json, os, queue, re, shutil, socket, subprocess, sys, threading, time
+import configparser, fcntl, functools, json, os, queue, re, select, shutil, socket, subprocess, sys, threading, time
 import tkinter as tk
 import tkinter.font as tkfont
 from collections import deque
@@ -15,6 +15,7 @@ CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
 MPV_CONF = CONF_DIR / "mpv.conf"
 SETTINGS = CONF_DIR / "settings.json"
+SERVICES = CONF_DIR / "services.json"   # tip serviciu + flag 'codat' (din SDT), scris după scanare
 REC_DIR = Path.home() / "Videos" / "TeleopsDVB"
 ICON_PATH = Path(__file__).parent / "icon.png"
 if not ICON_PATH.exists():
@@ -29,7 +30,7 @@ profile=gpu-hq
 gpu-api=opengl
 vo=gpu
 hwdec=auto
-gpu-context=wayland
+gpu-context=auto
 video-output-levels=full
 target-prim=bt.709
 target-trc=bt.1886
@@ -39,6 +40,7 @@ dscale=mitchell
 dither-depth=auto
 temporal-dither=yes
 keep-open=yes
+autofit-smaller=1920x1080
 autofit-larger=90%x90%
 cursor-autohide=1000
 
@@ -88,7 +90,7 @@ T = {  # cheie: (ro, en, it)
     "hk_search": ("Arată/ascunde căutarea", "Show/hide search", "Mostra/nascondi ricerca"),
     "hk_search_k": ("Click Dreapta pe listă", "Right Click on list", "Clic destro sulla lista"),
     "hk_epg": ("Informații EPG", "EPG info", "Info EPG"),
-    "hk_epg_k": ("CTRL + i", "CTRL + i", "CTRL + i"),
+    "hk_epg_k": ("i", "i", "i"),
     "hk_fav": ("Adaugă / Elimină din Favorite", "Add / Remove Favorites", "Aggiungi / Rimuovi Preferiti"),
     "hk_fav_k": ("CTRL + Click Stânga", "CTRL + Left Click", "CTRL + Clic sinistro"),
     "hk_play": ("Redă canalul", "Play channel", "Riproduci il canale"),
@@ -98,6 +100,10 @@ T = {  # cheie: (ro, en, it)
     # Localizare OSD MPV
     "osd_loading": ("Se încarcă EPG...", "Loading EPG...", "Caricamento EPG..."),
     "osd_na": ("Indisponibil", "Unavailable", "Non disponibile"),
+    "scrambled": ("Canal codat (criptat): nu poate fi redat fără card/CAM.", "Scrambled (encrypted) channel: it can't be played without a card/CAM.", "Canale criptato: non riproducibile senza card/CAM."),
+    "ca_btn": ("🔑 Detectează canalele codate", "🔑 Detect scrambled channels", "🔑 Rileva canali criptati"),
+    "ca_done": ("Detecție finalizată! Canale codate:", "Detection finished! Scrambled channels:", "Rilevamento completato! Canali criptati:"),
+    "already": ("Teleops DVB rulează deja.", "Teleops DVB is already running.", "Teleops DVB è già in esecuzione."),
     "osd_rem": ("Rămas", "Left", "Rimasti"),
 }
 
@@ -185,6 +191,7 @@ class TSFilter:
     def __init__(self, sid):
         self.sid, self.pmt_pid, self.keep = sid, None, {0}
         self.bufs, self.rest, self.epg = {}, b"", {}
+        self.sdt = {}                            # sid -> (service_type, codat?)
 
     def feed(self, data):
         data, out, i = self.rest + data, bytearray(), 0
@@ -196,7 +203,7 @@ class TSFilter:
                 pid = (data[i + 1] & 0x1F) << 8 | data[i + 2]
                 if pid in self.keep:
                     out += data[i:i + 188]
-                if pid in (0, 0x12, self.pmt_pid):
+                if pid in (0, 0x11, 0x12, self.pmt_pid):
                     for s in self.sections(pid, data[i:i + 188]):
                         try: self.parse(pid, s)
                         except Exception: pass
@@ -246,6 +253,16 @@ class TSFilter:
             self.keep = {0, self.pmt_pid} | pids
         elif pid == 0x12 and (t == 0x4E or 0x50 <= t <= 0x5F) and num == self.sid:
             self.eit(s)
+        elif pid == 0x11 and t == 0x42:          # SDT actual: service_type + free_CA_mode
+            i = 11
+            while i + 5 <= len(s) - 4:
+                sid, dl = s[i] << 8 | s[i + 1], (s[i + 3] & 0xF) << 8 | s[i + 4]
+                stype, j = None, i + 5
+                while j + 2 <= min(i + 5 + dl, len(s) - 4):
+                    if s[j] == 0x48 and j + 2 < len(s): stype = s[j + 2]
+                    j += 2 + s[j + 1]
+                self.sdt[sid] = (stype, bool(s[i + 3] & 0x10))
+                i += 5 + dl
 
     def eit(self, s):
         i = 14
@@ -280,6 +297,7 @@ class Streamer:
     def __init__(self, adapter, channel, sid, props, on_prop, get_lang_func=None):
         self.props, self.on_prop, self.conn = dict(props), on_prop, None
         self.rec, self.lock = None, threading.Lock()
+        self.t0, self.got_data = time.time(), False
         self.channel_name = channel
         self.get_lang = get_lang_func or (lambda: "Română")
         self.ts = TSFilter(sid) if sid and zap_all_pids() else None
@@ -309,7 +327,7 @@ class Streamer:
 
         mpv = [*MPV, "--no-terminal", f"--include={MPV_CONF}", f"--input-ipc-server={self.sock}",
                "--sid=auto", "--sub-visibility=yes", f"--volume={props['volume']}",
-               f"--mute={'yes' if props['mute'] else 'no'}", f"--title=TV - {channel}", "-"]
+               f"--mute={'yes' if props['mute'] else 'no'}", f"--title=TV - {channel.strip()}", "-"]
         self.mpv = subprocess.Popen(mpv, stdin=subprocess.PIPE, env=get_clean_env())
         for target in (self.pump, self.ipc):
             threading.Thread(target=target, daemon=True).start()
@@ -321,6 +339,7 @@ class Streamer:
         src = self.zap.stdout.fileno()
         try:
             while data := os.read(src, 1 << 16):
+                self.got_data = True
                 if self.ts: data = self.ts.feed(data)
                 if data:
                     self.mpv.stdin.write(data)
@@ -353,7 +372,8 @@ class Streamer:
         for i, k in enumerate(self.OBSERVED, 1):
             self.cmd("observe_property", i, k)
         
-        self.cmd("define-key", "Ctrl+i", "script-message show-info-osd")
+        self.cmd("keybind", "i", "script-message show-info-osd")        # mpv modern
+        self.cmd("define-key", "i", "script-message show-info-osd")     # mpv vechi
 
         def delayed_osd():
             # Așteaptă încărcarea EPG (EIT) înainte de afișare: minim 3 s, apoi verifică la 0,5 s
@@ -466,28 +486,35 @@ class Streamer:
 
 # ---------------------------------------------------------------- canale / tunere
 
+def load_services():
+    try: return json.loads(SERVICES.read_text(encoding="utf-8"))
+    except Exception: return {}
+
+
 def load_channels():
+    """(tv, radio, codate). Numele rămân EXACT ca în channels.conf (inclusiv spațiile finale):
+    dvbv5-zap caută canalul după numele exact din fișier."""
     cp = configparser.ConfigParser(interpolation=None, strict=False, delimiters=("=",))
     cp.optionxform = str
     cp.read(CHANNELS, encoding="utf-8")
-    tv, radio = [], []
+    svc = load_services()
+    tv, radio, locked = [], [], set()
     for n in cp.sections():
-        if not re.search(r"^SW |SW DL|SmartDTV", n):
-            sid = cp[n].get("SERVICE_ID", "").strip()
-            stype = cp[n].get("SERVICE_TYPE", "").strip()
-            n_lower = n.lower()
-            
-            is_radio = (stype in ("2", "0x2") or 
-                        re.search(r"\bradio\b|\bfm\b", n_lower))
-            
-            item = (n, int(sid) if sid.isdigit() else 0)
-            if is_radio:
-                radio.append(item)
-            else:
-                tv.append(item)
-    tv.sort(key=lambda x: x[0].lower())
-    radio.sort(key=lambda x: x[0].lower())
-    return tv, radio
+        if re.search(r"^SW |SW DL|SmartDTV", n):
+            continue
+        sec = cp[n]
+        sid = sec.get("SERVICE_ID", "").strip()
+        stype = sec.get("SERVICE_TYPE", "").strip()
+        meta = svc.get(f"{sec.get('FREQUENCY', '').strip()}:{sid}", {})
+        is_radio = bool(stype in ("2", "0x2") or meta.get("t") in (2, 0x0A)
+                        or ("VIDEO_PID" not in sec and "AUDIO_PID" in sec)       # fără video = radio
+                        or re.search(r"\bradio\b|\bfm\b|europa\s*fm", n.lower()))
+        if meta.get("ca"):
+            locked.add(n)
+        (radio if is_radio else tv).append((n, int(sid) if sid.isdigit() else 0))
+    tv.sort(key=lambda x: x[0].strip().lower())
+    radio.sort(key=lambda x: x[0].strip().lower())
+    return tv, radio, locked
 
 
 def list_frontends():
@@ -518,12 +545,152 @@ def probe_tuner(a, f):
     return (f"{label} ({', '.join(kinds)})" if kinds else label), f"adapter{a}/frontend{f}", systems
 
 
-def scan_init(mode):
-    blocks_real = [("DVBC/ANNEX_A", mhz, f"SYMBOL_RATE = 6875000\n\tMODULATION = {q}")
-                   for mhz in range(114, 859, 8) for q in ("QAM/64", "QAM/256")] if mode == "dvbc" else \
-                  [("DVBT2", 474 + 8 * (ch - 21), "BANDWIDTH_HZ = 8000000") for ch in range(21, 60)]
-    return "".join(f"[CHANNEL]\n\tDELIVERY_SYSTEM = {d}\n\tFREQUENCY = {mhz * 10**6}\n\t{x}\n\tINVERSION = AUTO\n\n"
-                   for d, mhz, x in blocks_real)
+def scan_init(mode, systems=()):
+    """Fișier inițial pentru dvbv5-scan, cu TOT spectrul.
+    DVB-C: 58-866 MHz din 8 în 8 MHz (rastrul 114+8k), QAM64 și QAM256 la 6875 kS/s.
+    DVB-T / T2: VHF canalele 5-12 (7 MHz) + UHF canalele 21-69 (8 MHz), separat DVB-T și DVB-T2."""
+    ent = []
+    if mode == "dvbc":
+        for mhz in range(58, 867, 8):
+            for q in ("QAM/64", "QAM/256"):
+                ent.append(["DELIVERY_SYSTEM = DVBC/ANNEX_A", f"FREQUENCY = {mhz * 10**6}",
+                            "SYMBOL_RATE = 6875000", f"MODULATION = {q}", "INVERSION = AUTO"])
+    else:
+        want_t = not systems or "DVBT" in systems
+        want_t2 = not systems or "DVBT2" in systems
+        chans = [(177_500_000 + 7_000_000 * i, 7_000_000) for i in range(8)] + \
+                [(474_000_000 + 8_000_000 * i, 8_000_000) for i in range(49)]
+        for fr, bw in chans:
+            if want_t2:
+                ent.append(["DELIVERY_SYSTEM = DVBT2", f"FREQUENCY = {fr}", f"BANDWIDTH_HZ = {bw}", "INVERSION = AUTO"])
+            if want_t:
+                ent.append(["DELIVERY_SYSTEM = DVBT", f"FREQUENCY = {fr}", f"BANDWIDTH_HZ = {bw}", "INVERSION = AUTO",
+                            "CODE_RATE_HP = AUTO", "CODE_RATE_LP = AUTO", "MODULATION = QAM/AUTO",
+                            "TRANSMISSION_MODE = AUTO", "GUARD_INTERVAL = AUTO", "HIERARCHY = NONE"])
+    return "".join("[CHANNEL]\n" + "".join(f"\t{l}\n" for l in e) + "\n" for e in ent)
+
+
+def _stop_proc(p):
+    if p.poll() is None:
+        p.terminate()
+        try: p.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+
+
+def warm_up(adapter, channel=None, init=None, maxwait=8.0):
+    """\"Bâzâit\" scurt al tunerului: la cold start primul tune/scan eșuează (firmware, demodulator
+    neinițializat). Pornim scurt dvbv5-zap (sau dvbv5-scan pe o singură intrare), așteptăm lock-ul,
+    apoi îl oprim curat; următoarea pornire reală merge din prima."""
+    a, f = re.findall(r"\d+", adapter)[:2]
+    tmp = CONF_DIR / "warm.tmp"
+    if channel:
+        cmd = ["dvbv5-zap", "-c", str(CHANNELS), "-a", a, "-f", f, "-o", "/dev/null", channel]
+    else:
+        cmd = ["dvbv5-scan", "-a", a, "-f", f, "-o", str(tmp), str(init)]
+    for _ in range(2):
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                                 errors="replace", env=get_clean_env())
+        except OSError:
+            return
+        locked = threading.Event()
+
+        def rd():
+            for line in p.stderr:
+                if "0x1f" in line.lower(): locked.set()
+        threading.Thread(target=rd, daemon=True).start()
+        t0 = time.time()
+        while p.poll() is None and time.time() - t0 < maxwait:
+            if locked.is_set():
+                time.sleep(0.4)
+                break
+            time.sleep(0.1)
+        quick_fail = p.poll() is not None and not locked.is_set() and time.time() - t0 < 3
+        _stop_proc(p)
+        time.sleep(0.5)
+        if not quick_fail:
+            break
+        time.sleep(1.0)
+    tmp.unlink(missing_ok=True)
+
+
+class ScrambleCounter:
+    """Numără pachetele cu date pe anumite PID-uri și câte dintre ele au bitul transport_scrambling_control
+    setat. Asta e criteriul real: un canal e codat dacă pachetele lui video/audio chiar vin criptate
+    (flag-ul free_CA din SDT e pus greșit de unii furnizori)."""
+
+    def __init__(self, pids):
+        self.total, self.scr, self.rest = dict.fromkeys(pids, 0), dict.fromkeys(pids, 0), b""
+
+    def feed(self, data):
+        data, i = self.rest + data, 0
+        while i + 188 <= len(data):
+            if data[i] != 0x47:
+                i += 1
+                continue
+            pid = (data[i + 1] & 0x1F) << 8 | data[i + 2]
+            if pid in self.total and not data[i + 1] & 0x80 and data[i + 3] & 0x10:   # are payload
+                self.total[pid] += 1
+                if data[i + 3] >> 6: self.scr[pid] += 1
+            i += 188
+        self.rest = data[i:]
+
+    def verdict(self, pid, need=25):
+        """True = codat, False = liber, None = nu sunt destule date ca să decidem."""
+        t = self.total.get(pid, 0)
+        if t < need: return None
+        r = self.scr[pid] / t
+        return True if r >= 0.8 else False if r <= 0.2 else None
+
+
+def detect_services(adapter, cancelled, set_proc):
+    """Pentru fiecare transponder citește câteva secunde de flux și decide, pe baza pachetelor reale,
+    ce canale sunt codate. Din SDT ia doar tipul serviciului (radio/TV). Scrie services.json
+    (cheie 'frecvență:service_id'). Canalele despre care nu se poate decide NU sunt marcate."""
+    if not zap_all_pids():
+        return
+    a, f = re.findall(r"\d+", adapter)[:2]
+    cp = configparser.ConfigParser(interpolation=None, strict=False, delimiters=("=",))
+    cp.optionxform = str
+    cp.read(CHANNELS, encoding="utf-8")
+    groups = {}
+    for n in cp.sections():
+        sec = cp[n]
+        fr, sid = sec.get("FREQUENCY", "").strip(), sec.get("SERVICE_ID", "").strip()
+        if not (fr and sid.isdigit()):
+            continue
+        pids = re.findall(r"\d+", sec.get("VIDEO_PID", "")) or re.findall(r"\d+", sec.get("AUDIO_PID", ""))
+        g = groups.setdefault(fr, [n, {}])
+        g[1][int(sid)] = int(pids[0]) if pids else None
+    res = {}
+    for fr, (name, svcs) in groups.items():
+        if cancelled(): return
+        pids = {p for p in svcs.values() if p}
+        sdt, cnt = TSFilter(0), ScrambleCounter(pids)
+        for _ in range(2):
+            p = subprocess.Popen(["dvbv5-zap", "-c", str(CHANNELS), "-a", a, "-f", f, "-r", "-P", "-o", "-", name],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=get_clean_env())
+            set_proc(p)
+            fd, t0 = p.stdout.fileno(), time.time()
+            while time.time() - t0 < 12 and not cancelled():
+                if select.select([fd], [], [], 0.5)[0]:
+                    d = os.read(fd, 1 << 16)
+                    if not d: break
+                    sdt.feed(d)
+                    cnt.feed(d)
+                    enough = all(cnt.total[x] >= 60 for x in pids)
+                    if enough and (set(svcs) <= set(sdt.sdt) or time.time() - t0 > 7): break
+                elif p.poll() is not None:
+                    break
+            _stop_proc(p)
+            if any(cnt.total.values()) or cancelled(): break
+            time.sleep(1.0)
+        for sid, pid in svcs.items():
+            res[f"{fr}:{sid}"] = {"t": sdt.sdt.get(sid, (None,))[0], "ca": cnt.verdict(pid) if pid else None}
+    if not cancelled():
+        SERVICES.write_text(json.dumps(res), encoding="utf-8")
 
 
 class ChannelList(tk.Text):
@@ -540,7 +707,9 @@ class ChannelList(tk.Text):
                          borderwidth=0, takefocus=True, **kw)
         self.selectable = []
         self.tag_configure("title", justify="center", underline=True)
+        self.tag_configure("locked", foreground="#dc2626")      # canale codate: text maro-roșiatic
         self.tag_configure("cur", background=sel_bg, foreground=sel_fg)
+        self.tag_raise("cur")
         # fără bindingurile implicite ale lui Text (editare, selecție cu mouse-ul)
         self.bindtags((str(self), str(self.winfo_toplevel()), "all"))
         self.bind("<Button-1>", self._click)
@@ -554,8 +723,8 @@ class ChannelList(tk.Text):
         self.delete("1.0", "end")
         self.selectable = []
 
-    def add(self, text, title=False, selectable=False):
-        self.insert("end", text, "title" if title else ())
+    def add(self, text, title=False, selectable=False, locked=False):
+        self.insert("end", text, "title" if title else ("locked" if locked else ()))
         self.insert("end", "\n")
         self.selectable.append(selectable)
 
@@ -637,6 +806,7 @@ class Main:
         self.rec_dir = Path(self.settings.get("rec_dir") or REC_DIR)
 
         self.list_items_meta = []
+        self.locked, self.warmed, self.warm_busy, self._retry = set(), set(), False, 0
 
         if ICON_PATH.exists():
             try:
@@ -653,8 +823,8 @@ class Main:
         self._min_h = 0
         root.resizable(False, True)
 
-        root.bind("<Control-i>", self.on_ctrl_i)
-        root.bind("<Control-I>", self.on_ctrl_i)
+        root.bind("<Key-i>", self.on_key_i)
+        root.bind("<Key-I>", self.on_key_i)
 
         base = tkfont.nametofont("TkDefaultFont")
         self.f_norm, self.f_bold, f_brand = base.copy(), base.copy(), base.copy()
@@ -720,6 +890,7 @@ class Main:
 
         self.scan_c_btn = self._btn(tc, "scan_c", lambda: self.start_scan("dvbc"))
         self.scan_t_btn = self._btn(tc, "scan_t", lambda: self.start_scan("dvbt"))
+        self.ca_btn = self._btn(tc, "ca_btn", self.start_ca_detect)
         self._btn(tc, "cfg_mpv", self.open_mpv_config)
         self.rec_tip = Tip(self._btn(tc, "rec_dir", self.choose_rec_dir), str(self.rec_dir))
         self.progress_bar = ttk.Progressbar(tc, mode="indeterminate")
@@ -905,7 +1076,11 @@ class Main:
             state_txt = ("Pornit" if self.muted else "Oprit") if self.lang == "Română" else (("On" if self.muted else "Off") if self.lang == "English" else ("Attivo" if self.muted else "Disattivo"))
             self.stream.cmd("show-text", f"{mute_txt}: {state_txt}", 3000)
 
-    def on_ctrl_i(self, event=None):
+    def on_key_i(self, event=None):
+        # scurtăturile sunt dezactivate cât timp se scrie în căutare (sau în alt câmp de text)
+        w = self.root.focus_get()
+        if w is self.search or isinstance(w, (tk.Entry, ttk.Entry, ttk.Combobox)):
+            return
         if self.stream:
             self.stream.show_tv_osd()
 
@@ -951,7 +1126,13 @@ class Main:
         if 0 <= i < len(self.list_items_meta):
             meta = self.list_items_meta[i]
             if meta[0] == "channel":
-                self.tune(meta[1])
+                self.try_tune(meta[1])
+
+    def try_tune(self, name):
+        if name in self.locked:
+            messagebox.showinfo(TITLE, self.t("scrambled"), parent=self.root)
+        else:
+            self.tune(name)
 
     def on_ctrl_click(self, e):
         i = self.chlist.nearest(e.y)
@@ -972,15 +1153,22 @@ class Main:
             if 0 <= i < len(self.list_items_meta):
                 meta = self.list_items_meta[i]
                 if meta[0] == "channel":
-                    self.tune(meta[1])
+                    self.try_tune(meta[1])
 
     def tick(self):
         self.root.after(250, self.tick)
         if self.stream and not self.stream.alive():
-            rc = self.stream.zap.poll()
+            s, name = self.stream, self.cur
+            rc = s.zap.poll()
             self.stop()
             if (rc or 0) > 0:
-                if rc == 255 or not list_frontends():
+                if not list_frontends():
+                    messagebox.showerror(self.t("play_err"), self.t("tuner_crash"), parent=self.root)
+                    self.detect_tuners()
+                elif not s.got_data and self._retry < 1 and name and time.time() - s.t0 < 20:
+                    # cold start: prima pornire a eșuat înainte să primească date -> a doua, automat
+                    self.root.after(800, lambda: self.tune(name, 1))
+                elif rc == 255:
                     messagebox.showerror(self.t("play_err"), self.t("tuner_crash"), parent=self.root)
                     self.detect_tuners()
                 else:
@@ -988,7 +1176,7 @@ class Main:
         on = self.stream is not None
         for b in (self.rec_btn, self.epg_btn, self.stop_btn):
             self.set_enabled(b, on)
-        self.brand.configure(text=self.cur if on and self.cur else TITLE)
+        self.brand.configure(text=self.cur.strip() if on and self.cur else TITLE)
         self.set_epg(self.epg_now_next() if on else "")
         if self.rec_on:
             h, r = divmod(int(time.time() - self.rec_t0), 3600)
@@ -1175,6 +1363,28 @@ class Main:
             self.adapter.configure(values=[])
             self.adapter.set(self.t("no_tuner"))
         self.update_scan_buttons()
+        self.warm_async()
+
+    def warm_async(self):
+        ad = self.adapter_data()
+        names = [c for c, _ in self.tv_channels + self.radio_channels]
+        ch = self.last_channel if self.last_channel in names else (names[0] if names else "")
+        if not ad or not ch or ad in self.warmed or self.warm_busy or self.scan_active:
+            return
+        self.warm_busy = True
+
+        def work():
+            try: warm_up(ad, channel=ch)
+            finally: self.events.put(lambda: self._warm_done(ad))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _warm_done(self, ad):
+        self.warm_busy = False
+        self.warmed.add(ad)
+
+    def adapter_systems(self):
+        i = self.adapter.current()
+        return tuple(self.adapter_items[i][2]) if self.adapter_items and i >= 0 else ()
 
     def adapter_data(self):
         i = self.adapter.current()
@@ -1194,9 +1404,10 @@ class Main:
             cable = terr = False
         self.set_enabled(self.scan_c_btn, cable)
         self.set_enabled(self.scan_t_btn, terr)
+        self.set_enabled(self.ca_btn, bool(self.adapter_items) and not self.scan_active)
 
     def reload(self):
-        self.tv_channels, self.radio_channels = load_channels()
+        self.tv_channels, self.radio_channels, self.locked = load_channels()
         self._radio_names = {c for c, _ in self.radio_channels}
         self.fill_channels()
 
@@ -1216,9 +1427,10 @@ class Main:
             self.list_items_meta.append(("header", txt, "title"))
 
         def channel(c, label, kind):
-            self.chlist.add(label, selectable=True)
+            self.chlist.add(label, selectable=True, locked=c in self.locked)
             self.list_items_meta.append(("channel", c, kind))
 
+        lock = lambda c: "   🔑" if c in self.locked else ""
         all_tv = [c for c, _ in self.tv_channels if q in c.lower()]
         all_rad = [c for c, _ in self.radio_channels if q in c.lower()]
 
@@ -1235,7 +1447,7 @@ class Main:
             spacer("space_bot")
             for c in fav_tv + fav_rad:
                 icon = "📻" if c in self._radio_names else "📺"
-                channel(c, f"★  {icon}  {c}", "fav")
+                channel(c, f"★  {icon}  {c.strip()}{lock(c)}", "fav")
             has_prev = True
 
         if all_tv:
@@ -1244,7 +1456,7 @@ class Main:
             title("tv_title")
             spacer("space_bot_tv")
             for c in norm_tv:
-                channel(c, f"  📺  {c}", "tv")
+                channel(c, f"  📺  {c.strip()}{lock(c)}", "tv")
             has_prev = True
 
         if all_rad:
@@ -1253,7 +1465,7 @@ class Main:
             title("radio_title")
             spacer("space_bot_rad")
             for c in norm_rad:
-                channel(c, f"  📻  {c}", "radio")
+                channel(c, f"  📻  {c.strip()}{lock(c)}", "radio")
 
         self.select_current()
         self.chlist.yview_moveto(scroll_pos[0])
@@ -1270,7 +1482,7 @@ class Main:
             return
         a, f = nums[:2]
         init = CONF_DIR / f"auto-scan-{mode[-1]}.conf"
-        init.write_text(scan_init(mode))
+        init.write_text(scan_init(mode, self.adapter_systems()))
         out = CONF_DIR / "channels.scan.tmp"   # lista actuală nu e atinsă dacă scanarea e anulată/eșuează
         out.unlink(missing_ok=True)
         self.stop()
@@ -1281,15 +1493,32 @@ class Main:
         self.set_enabled(self.cancel_btn, True)
         self.cancel_btn.pack(fill="x", pady=(0, 5))
 
+        ad = self.adapter_data()
+        warm_init = CONF_DIR / "warm-scan.conf"
+        warm_init.write_text(init.read_text().split("\n\n")[0] + "\n\n")
+
+        def has_channels():
+            try: return out.exists() and bool(re.search(r"^\[", out.read_text(errors="replace"), re.M))
+            except OSError: return False
+
         def work():
+            # 1) \"bâzâit\" al tunerului (doar dacă nu a fost deja făcut) - evită scanarea de două ori
+            for _ in range(100):
+                if not self.warm_busy: break
+                time.sleep(0.2)
+            if ad not in self.warmed and not self.scan_cancelled:
+                warm_up(ad, init=warm_init, maxwait=4.0)
+                self.warmed.add(ad)
+            warm_init.unlink(missing_ok=True)
+            # 2) scanarea propriu-zisă; reîncearcă singură dacă iese goală/eșuată
             cmd = ["dvbv5-scan", "-a", a, "-f", f, "-o", str(out), str(init)]
             rc, err = -1, ""
-            for attempt in range(2):
+            for attempt in range(3):
                 if self.scan_cancelled:
                     break
                 p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=get_clean_env())
                 self.scan_proc = p
-                if self.scan_cancelled:      # anulare apăsată chiar între pornire și atribuire
+                if self.scan_cancelled:
                     p.terminate()
                 tail = deque(maxlen=20)
                 for l in p.stdout:
@@ -1300,19 +1529,65 @@ class Main:
                 if self.scan_cancelled:
                     break
                 time.sleep(0.6)
-                if rc == 0 and out.exists():
+                if rc == 0 and has_channels():
                     break
                 err = "\n".join(tail) or f"Cod ieșire {rc}"
-                if attempt == 0:
+                if attempt < 2:
                     time.sleep(2.0)
             cancelled = self.scan_cancelled
-            ok = (not cancelled) and rc == 0 and out.exists()
+            ok = (not cancelled) and rc == 0 and has_channels()
             if ok:
                 os.replace(out, CHANNELS)
+                SERVICES.unlink(missing_ok=True)
+                try:   # 3) marchează canalele codate / radio (din SDT)
+                    detect_services(ad, lambda: self.scan_cancelled, lambda pr: setattr(self, "scan_proc", pr))
+                except Exception:
+                    pass
             else:
                 out.unlink(missing_ok=True)
             self.events.put(lambda: self.on_scan(ok, err, cancelled))
         threading.Thread(target=work, daemon=True).start()
+
+    def start_ca_detect(self):
+        ad = self.adapter_data()
+        if self.scan_active or not ad or not (self.tv_channels or self.radio_channels):
+            return
+        if not zap_all_pids():
+            messagebox.showwarning(TITLE, self.t("epg_na"), parent=self.root)
+            return
+        self.stop()
+        self.scan_active, self.scan_cancelled = True, False
+        self.update_scan_buttons()
+        self.progress_bar.pack(fill="x", pady=5)
+        self.progress_bar.start(15)
+        self.set_enabled(self.cancel_btn, True)
+        self.cancel_btn.pack(fill="x", pady=(0, 5))
+
+        def work():
+            for _ in range(100):
+                if not self.warm_busy: break
+                time.sleep(0.2)
+            err = ""
+            try: detect_services(ad, lambda: self.scan_cancelled, lambda pr: setattr(self, "scan_proc", pr))
+            except Exception as e: err = str(e)
+            cancelled = self.scan_cancelled
+            self.events.put(lambda: self.on_ca_done(err, cancelled))
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_ca_done(self, err, cancelled):
+        self.scan_proc = None
+        self.scan_active = False
+        self.progress_bar.stop()
+        self.progress_bar.pack_forget()
+        self.cancel_btn.pack_forget()
+        self.update_scan_buttons()
+        if cancelled:
+            return
+        self.reload()
+        if err:
+            messagebox.showwarning(self.t("scan_err"), err, parent=self.root)
+        else:
+            messagebox.showinfo(TITLE, f"{self.t('ca_done')} {len(self.locked)}", parent=self.root)
 
     def cancel_scan(self):
         if not self.scan_active:
@@ -1345,10 +1620,13 @@ class Main:
         else:
             messagebox.showwarning(self.t("scan_err"), err, parent=self.root)
 
-    def tune(self, name):
+    def tune(self, name, retry=0, wait=0):
+        if self.warm_busy and wait < 60:       # tunerul e „bâzâit” în fundal: așteaptă fără să blocheze fereastra
+            self.root.after(200, lambda: self.tune(name, retry, wait + 1))
+            return
         self.stop()
         time.sleep(0.15)
-        name = name.strip()
+        self._retry = retry                    # NU mai tăiem spațiile: numele trebuie să fie exact ca în channels.conf
         try:
             if not self.adapter_data():
                 raise RuntimeError(self.t("no_tuner"))
@@ -1412,7 +1690,24 @@ class Main:
         self.root.destroy()
 
 
+def single_instance():
+    """Doar o instanță: lacăt de fișier (eliberat automat de sistem când procesul se termină)."""
+    global _LOCK_FH
+    _LOCK_FH = open(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "teleops-dvb.lock", "w")
+    try:
+        fcntl.flock(_LOCK_FH, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
 if __name__ == "__main__":
+    if not single_instance():
+        lang = load_settings().get("lang")
+        r = tk.Tk()
+        r.withdraw()
+        messagebox.showinfo(TITLE, T["already"][LANGS.index(lang) if lang in LANGS else 0])
+        sys.exit(0)
     root = tk.Tk()
     Main(root)
     root.mainloop()
