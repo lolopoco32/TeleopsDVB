@@ -56,7 +56,7 @@ chmod +x teleops.py
 
 ## ⌨️ Hotkeys & Shortcuts
 
-- **`CTRL + i`** — Show OSD with current program / EPG info inside the MPV player window.
+- **`i`** — Show OSD with current program / EPG info inside the MPV player window.
 - **`Right Click on channel list`** — Toggle the search bar visibility.
 - **`CTRL + Left Click on channel`** — Add or remove a channel from Favorites.
 - **`Double Click / Enter`** — Tune to the selected channel.
