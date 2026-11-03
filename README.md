@@ -27,7 +27,7 @@ sudo apt update
 sudo apt install python3-tk mpv dvb-tools
 ```
 
-*(Note: MPV installed via Flatpak `io.mpv.Mpv` is also automatically detected).*
+*(Note: MPV installed via Flatpak `io.mpv.Mpv` is also automatically detected. No need to install mpv if you already have flatpak version).*
 
 ---
 
