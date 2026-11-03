@@ -53,17 +53,20 @@ chmod +x teleops.py
 ```
 
 ---
-
-## ⌨️ Hotkeys & Shortcuts
-
-- **`i`** — Show OSD with current program / EPG info inside the MPV player window.
-- **`Right Click on channel list`** — Toggle the search bar visibility.
-- **`CTRL + Left Click on channel`** — Add or remove a channel from Favorites.
-- **`Double Click / Enter`** — Tune to the selected channel.
-- **`Click on main title ("Teleops DVB")`** — Toggle settings and tuner configuration panel.
+## ⌨️ Keyboard shortcuts
+| Action | Shortcut |
+|---|---|
+| EPG info | `Ctrl + I` *(was `I`)* |
+| Start/stop recording | `Ctrl + R` *(new)* |
+| Fullscreen | `F` / `F11` *(new)* |
+| Hide/show interface | `.` / double-click on video *(new)* |
+| Quit program | `Ctrl + Shift + X` *(new)* |
 
 ---
 
 ## 📄 License
 
 This project is open-source and available for personal use, modification, and distribution under the MIT License.
+
+<img width="1932" height="1090" alt="Screenshot_20261103_075441" src="https://github.com/user-attachments/assets/5f593e46-ad12-4d8f-ac84-c8d1b272f8da" />
+<img width="1418" height="1028" alt="Screenshot_20261103_081626" src="https://github.com/user-attachments/assets/39b0218b-b809-49a2-927a-45a20026769e" />
