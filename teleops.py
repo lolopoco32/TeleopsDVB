@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Teleops DVB - Tkinter + mpv + dvbv5-zap, cu EPG și subtitrări DVB (nu doar cele embedded).
-Dependențe: python3-tk, mpv (sau io.mpv.Mpv Flatpak), dvb-tools (dvbv5-scan, dvbv5-zap, dvb-fe-tool)
+"""Teleops DVB - Tkinter + mpv + dvbv5-zap, cu EPG și subtitrări DVB.
+Grupat pe module într-un singur fișier pentru întreținere facilă.
 """
 import configparser, fcntl, functools, json, os, queue, re, select, shutil, socket, subprocess, sys, threading, time
 import ctypes, ctypes.util
@@ -16,18 +16,18 @@ CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
 MPV_CONF = CONF_DIR / "mpv.conf"
 SETTINGS = CONF_DIR / "settings.json"
-SERVICES = CONF_DIR / "services.json"   # tip serviciu + flag 'codat' (din SDT), scris după scanare
+SERVICES = CONF_DIR / "services.json"
 REC_DIR = Path.home() / "Videos" / "TeleopsDVB"
 ICON_PATH = Path(__file__).parent / "icon.png"
 if not ICON_PATH.exists():
     ICON_PATH = Path("/usr/share/icons/hicolor/256x256/apps/teleops.png")
 IPC_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "app/io.mpv.Mpv"
-VOL_MAX = 130           # volume-max implicit în mpv
-TXT_DARK = "#000000"    # culoare text implicită
-LIST_MIN_H = 150        # înălțimea minimă (px) a listei de canale la strângerea ferestrei
-PANEL_W = 320           # lățimea fixă a panoului cu comenzi
-VIDEO_MIN_W = 480       # lățimea minimă a zonei video
-GPU_CONTEXT = os.environ.get("TELEOPS_GPU_CONTEXT", "x11egl")   # mpv încorporat cere X11 (XWayland sub Wayland)
+VOL_MAX = 130
+TXT_DARK = "#000000"
+LIST_MIN_H = 150
+PANEL_W = 320
+VIDEO_MIN_W = 480
+GPU_CONTEXT = os.environ.get("TELEOPS_GPU_CONTEXT", "x11egl")
 
 MPV_CONF_DATA = """# MPV configuration file
 profile=gpu-hq
@@ -44,11 +44,8 @@ dscale=mitchell
 dither-depth=auto
 temporal-dither=yes
 keep-open=yes
-autofit-smaller=1920x1080
-autofit-larger=90%x90%
 cursor-autohide=1000
 
-# Subtitrări (sid=auto și sub-visibility=yes sunt forțate și din linia de comandă)
 slang=rum,ron,ro,en,it
 sub-font-size=36
 demuxer-lavf-probe-size=10000000
@@ -57,9 +54,7 @@ demuxer-readahead-seconds=5
 """
 
 OSC_PATH = CONF_DIR / "teleops-osc.lua"
-OSC_LUA = r'''-- Teleops DVB: mini-OSC cu doar subtitrare, coloană sonoră și difuzor (înlocuiește OSC-ul standard mpv).
--- Fișier generat de teleops.py (se rescrie la fiecare pornire).
-local L = {sub = "Subtitrare", audio = "Coloană sonoră", off = "Dezactivat"}
+OSC_LUA = r'''local L = {sub = "Subtitrare", audio = "Coloană sonoră", off = "Dezactivat"}
 local ACC = "FFC040"
 local shown, menu, items, timer = false, nil, {}, nil
 local last_over, last_hot = false, false
@@ -412,6 +407,168 @@ MPV_CONFIG_T = {
     "btn_reset": ("🔄 Resetează la Default", "🔄 Reset to Default", "🔄 Ripristina Predefiniti"),
     "btn_edit_conf": ("📝 Deschide mpv.conf", "📝 Open mpv.conf", "📝 Apri mpv.conf"),
 }
+
+# --- MODULUL DE GEOMETRIE ȘI REDIMENSIONARE ---
+EDGE = 6
+EDGE_CORNER = 14
+CURSORS = {
+    "n": "sb_v_double_arrow", "s": "sb_v_double_arrow", "w": "sb_h_double_arrow", "e": "sb_h_double_arrow",
+    "nw": "top_left_corner", "ne": "top_right_corner", "sw": "bottom_left_corner", "se": "bottom_right_corner"
+}
+
+def edge_at(x, y, rect, edge=EDGE, corner=EDGE_CORNER):
+    rx, ry, w, h = rect
+    if not (rx <= x < rx + w and ry <= y < ry + h):
+        return None
+    dl, dr, dt, db = x - rx, rx + w - 1 - x, y - ry, ry + h - 1 - y
+    on_h_side, on_v_side = min(dt, db) < edge, min(dl, dr) < edge
+    reach_x = corner if on_h_side else edge
+    reach_y = corner if on_v_side else edge
+    horiz = "w" if dl < reach_x else "e" if dr < reach_x else ""
+    vert = "n" if dt < reach_y else "s" if db < reach_y else ""
+    return (vert + horiz) or None
+
+def resize_geom(edge, start, dx, dy, min_size):
+    x, y, w, h = start
+    min_w, min_h = min_size
+    nw, nh, nx, ny = w, h, x, y
+    if "e" in edge:
+        nw = max(min_w, w + dx)
+    if "s" in edge:
+        nh = max(min_h, h + dy)
+    if "w" in edge:
+        nw = max(min_w, w - dx)
+        nx = x + w - nw
+    if "n" in edge:
+        nh = max(min_h, h - dy)
+        ny = y + h - nh
+    return nx, ny, nw, nh
+
+
+class WindowChrome:
+    def __init__(self, root, video, x11, *, get_stream, is_fullscreen):
+        self.root, self.video, self.x11 = root, video, x11
+        self.get_stream, self.is_fullscreen = get_stream, is_fullscreen
+        self.borderless = False
+        self._mdrag, self._btn_prev = None, False
+        self._resize, self._cursor = None, ""
+        root.bind("<ButtonPress-1>", self._on_press, add="+")
+
+    def win_pos(self):
+        m = re.match(r"\d+x\d+([+-]+\d+)([+-]+\d+)", self.root.geometry())
+        if not m:
+            return self.root.winfo_x(), self.root.winfo_y()
+        return int(m.group(1).replace("+-", "-")), int(m.group(2).replace("+-", "-"))
+
+    def _drag_to(self, p, x, y):
+        x0, y0, wx, wy, moved = p
+        dx, dy = x - x0, y - y0
+        if moved or abs(dx) + abs(dy) >= 4:
+            moved = True
+            self.root.geometry(f"+{wx + dx}+{wy + dy}")
+        return x0, y0, wx, wy, moved
+
+    def bind_drag(self, w, click=None):
+        st = {}
+        def motion(e):
+            if st.get("p") and not self.is_fullscreen() and not self._resize:
+                st["p"] = self._drag_to(st["p"], e.x_root, e.y_root)
+        def release(e):
+            p = st.pop("p", None)
+            if p and not p[4] and click:
+                click()
+        w.bind("<ButtonPress-1>", lambda e: st.update(p=(e.x_root, e.y_root, *self.win_pos(), False)), add="+")
+        w.bind("<B1-Motion>", motion, add="+")
+        w.bind("<ButtonRelease-1>", release, add="+")
+
+    def bind_dead_zones(self, w, exclude=()):
+        if type(w) in (tk.Frame, ttk.Frame, ttk.Label) and w not in exclude:
+            self.bind_drag(w)
+        for c in w.winfo_children():
+            self.bind_dead_zones(c, exclude)
+
+    def start_mpv_poll(self):
+        self._mpv_drag_poll()
+
+    def _rect(self):
+        return self.root.winfo_rootx(), self.root.winfo_rooty(), self.root.winfo_width(), self.root.winfo_height()
+
+    def _begin_resize(self, edge, x, y):
+        wx, wy = self.win_pos()
+        self._resize = (edge, x, y, wx, wy, self.root.winfo_width(), self.root.winfo_height())
+
+    def _on_press(self, e):
+        if self.borderless and not self.is_fullscreen() and not self._resize:
+            edge = edge_at(e.x_root, e.y_root, self._rect())
+            if edge:
+                self._begin_resize(edge, e.x_root, e.y_root)
+
+    def _set_cursor(self, edge):
+        cur = CURSORS.get(edge or "", "")
+        if cur != self._cursor:
+            self._cursor = cur
+            try: self.root.configure(cursor=cur)
+            except tk.TclError: pass
+
+    def _resize_to(self, x, y):
+        edge, x0, y0, wx, wy, w, h = self._resize
+        try: min_size = self.root.minsize() or (1, 1)
+        except (tk.TclError, ValueError): min_size = (1, 1)
+        nx, ny, nw, nh = resize_geom(edge, (wx, wy, w, h), x - x0, y - y0, min_size)
+        self.root.geometry(f"{nw}x{nh}+{nx}+{ny}")
+
+    def _mpv_drag_poll(self):
+        self.root.after(12 if (self._mdrag or self._resize) else 40, self._mpv_drag_poll)
+        stream = self.get_stream()
+        if not self.x11 or self.is_fullscreen():
+            self._mdrag = self._resize = self._btn_prev = None
+            self._set_cursor(None)
+            return
+        try:
+            x, y, mask = self.x11.pointer()
+        except Exception:
+            return
+        down = bool(mask & X11.BUTTON1)
+        if self.borderless:
+            if self._resize:
+                if down:
+                    self._resize_to(x, y)
+                else:
+                    self._resize = None
+                self._btn_prev = down
+                return
+            edge = edge_at(x, y, self._rect())
+            if not down:
+                self._set_cursor(edge)
+            elif not self._btn_prev and edge:
+                self._begin_resize(edge, x, y)
+                self._btn_prev = down
+                return
+        if not stream:
+            self._mdrag, self._btn_prev = None, down
+            return
+        v = self.video
+        if down and not self._btn_prev:
+            if (v.winfo_rootx() <= x < v.winfo_rootx() + v.winfo_width() and v.winfo_rooty() <= y < v.winfo_rooty() + v.winfo_height()
+                    and not stream.osc_hot):
+                self._mdrag = (x, y, *self.win_pos(), False)
+        elif down and self._mdrag:
+            self._mdrag = self._drag_to(self._mdrag, x, y)
+        elif not down:
+            self._mdrag = None
+        self._btn_prev = down
+
+    def set_borderless(self, on):
+        if not self.x11:
+            return False
+        self.root.update_idletasks()
+        self.x11.set_borderless(self.root.winfo_id(), on)
+        self.borderless = bool(on)
+        if not on:
+            self._resize = None
+            self._set_cursor(None)
+        return True
+
 
 def load_settings():
     try: return json.loads(SETTINGS.read_text(encoding="utf-8"))
@@ -1123,7 +1280,6 @@ class Main:
         self.adapter_items, self.tr = [], []
         self.rec_dir = Path(self.settings.get("rec_dir") or REC_DIR)
         self.x11 = X11.create()
-        self._mdrag, self._btn_prev = None, False
         self._stop_t, self._rec_osd_txt = 0.0, ""
         self.loading, self.load_name = False, ""
 
@@ -1199,7 +1355,6 @@ class Main:
         top.pack(fill="x", pady=5)
         top.columnconfigure(0, weight=1)
         self.brand = ttk.Label(top, text=TITLE, style="Brand.TLabel", anchor="center", cursor="hand2")
-        self._drag_bind(self.brand, click=self.toggle_tuner)
         self.brand.grid(row=0, column=0, sticky="ew")
         self.rec_lbl = ttk.Label(main, style="Rec.TLabel", anchor="center")
         self.top = top
@@ -1305,6 +1460,13 @@ class Main:
         self.rec_btn = self._btn(bottom, "rec_off", lambda: self.set_recording(not self.rec_on), pady=(5, 0))
         self.stop_btn = self._btn(bottom, "stop_play", self.on_stop_btn, pady=(5, 0))
 
+        # Inițializare WindowChrome pentru redimensionare prin margini, mutare și deschidere setări din titlu
+        self.chrome = WindowChrome(root, self.video, self.x11, get_stream=lambda: self.stream, is_fullscreen=lambda: self.fullscreen)
+        self.chrome.bind_drag(self.brand, click=self.toggle_tuner)
+        self.chrome.bind_drag(self.video)
+        self.chrome.bind_drag(self.video_lbl)
+        self.chrome.bind_dead_zones(self.panel, exclude=(self.brand, self.mute_lbl))
+
         self.apply_translations()
         self._ph_show()
         self.settings_on = bool(self.settings.get("tuner_visible", True))
@@ -1317,10 +1479,7 @@ class Main:
         self.detect_tuners()
         self.root.after(50, lambda: self.chlist.yview_moveto(self.settings.get("scroll_position", 0.0)))
         root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self._bind_drag(self.panel)
-        self._drag_bind(self.video)
-        self._drag_bind(self.video_lbl)
-        root.after(40, self._mpv_drag_poll)
+        self.chrome.start_mpv_poll()
         if self.borderless_var.get(): root.after(400, self.apply_borderless)
         self.layout()
         root.after(250, self.tick)
@@ -1415,59 +1574,10 @@ class Main:
         elif msg == "quit-app": self.on_close()
         elif msg == "toggle-rec": self.toggle_rec()
 
-    def _win_pos(self):
-        m = re.match(r"\d+x\d+([+-]+\d+)([+-]+\d+)", self.root.geometry())
-        if not m: return self.root.winfo_x(), self.root.winfo_y()
-        return int(m.group(1).replace("+-", "-")), int(m.group(2).replace("+-", "-"))
-
-    def _drag_to(self, p, x, y):
-        x0, y0, wx, wy, moved = p
-        dx, dy = x - x0, y - y0
-        if moved or abs(dx) + abs(dy) >= 4:
-            moved = True
-            self.root.geometry(f"+{wx + dx}+{wy + dy}")
-        return x0, y0, wx, wy, moved
-
-    def _drag_bind(self, w, click=None):
-        st = {}
-        def motion(e):
-            if st.get("p") and not self.fullscreen: st["p"] = self._drag_to(st["p"], e.x_root, e.y_root)
-        def release(e):
-            p = st.pop("p", None)
-            if p and not p[4] and click: click()
-        w.bind("<ButtonPress-1>", lambda e: st.update(p=(e.x_root, e.y_root, *self._win_pos(), False)), add="+")
-        w.bind("<B1-Motion>", motion, add="+")
-        w.bind("<ButtonRelease-1>", release, add="+")
-
-    def _bind_drag(self, w):
-        if type(w) in (tk.Frame, ttk.Frame, ttk.Label) and w not in (self.brand, self.mute_lbl):
-            self._drag_bind(w)
-        for c in w.winfo_children(): self._bind_drag(c)
-
-    def _mpv_drag_poll(self):
-        self.root.after(12 if self._mdrag else 40, self._mpv_drag_poll)
-        if not (self.x11 and self.stream) or self.fullscreen:
-            self._mdrag = self._btn_prev = None
-            return
-        try: x, y, mask = self.x11.pointer()
-        except Exception: return
-        down = bool(mask & X11.BUTTON1)
-        v = self.video
-        if down and not self._btn_prev:
-            if (v.winfo_rootx() <= x < v.winfo_rootx() + v.winfo_width() and v.winfo_rooty() <= y < v.winfo_rooty() + v.winfo_height()
-                    and not self.stream.osc_hot):
-                self._mdrag = (x, y, *self._win_pos(), False)
-        elif down and self._mdrag: self._mdrag = self._drag_to(self._mdrag, x, y)
-        elif not down: self._mdrag = None
-        self._btn_prev = down
-
     def apply_borderless(self):
-        if not self.x11:
+        if not self.chrome.set_borderless(self.borderless_var.get()):
             self.borderless_var.set(False)
             messagebox.showwarning(TITLE, self.t("x11_na"), parent=self.root)
-            return
-        self.root.update_idletasks()
-        self.x11.set_borderless(self.root.winfo_id(), self.borderless_var.get())
 
     def fit_min_height(self):
         if not self.ui_visible: return
@@ -1643,7 +1753,6 @@ class Main:
         self.fit_min_height()
 
     def open_advanced_mpv_config(self):
-        """Fereastră nouă de configurare MPV compactă, perfect centrată și aliniată simetric."""
         w = tk.Toplevel(self.root)
         idx_lang = LANGS.index(self.lang) if self.lang in LANGS else 0
         w.title(MPV_CONFIG_T["win_title"][idx_lang])
@@ -1671,29 +1780,14 @@ class Main:
             f = ttk.Frame(parent_nb)
             canvas = tk.Canvas(f, borderwidth=0, highlightthickness=0)
             scrollbar = ttk.Scrollbar(f, orient="vertical", command=canvas.yview)
-            
-            # Container intern centrat cu lățime fixă uniformă pentru aliniere perfectă a chenarelor
             inner_container = ttk.Frame(canvas)
             scrollable_frame = ttk.Frame(inner_container, padding=10)
             scrollable_frame.pack(anchor="center", fill="both", expand=True)
-            
-            scrollable_frame.bind(
-                "<Configure>",
-                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-            )
-            
+            scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
             win_id = canvas.create_window((0, 0), window=inner_container, anchor="nw")
-            
-            def _on_canvas_configure(e):
-                canvas.itemconfig(win_id, width=e.width)
-            canvas.bind("<Configure>", _on_canvas_configure)
-            
+            canvas.bind("<Configure>", lambda e: canvas.itemconfig(win_id, width=e.width))
             canvas.configure(yscrollcommand=scrollbar.set)
-            
-            def _on_mousewheel(e):
-                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-            canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
+            canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
             canvas.pack(side="left", fill="both", expand=True)
             scrollbar.pack(side="right", fill="y")
             parent_nb.add(f, text=tab_title)
@@ -1710,8 +1804,6 @@ class Main:
 
         def add_opt(tab, key, title_tr, desc_tr, default_val, options, choice_descs=None):
             col, row = grid_pos.get(tab, (0, 0))
-            
-            # Cadru exterior pentru aliniere simetrică pe 2 coloane centrate
             cell_frame = ttk.Frame(tab)
             cell_frame.grid(row=row, column=col, padx=6, pady=4, sticky="nsew")
             tab.columnconfigure(col, weight=1)
@@ -1721,13 +1813,10 @@ class Main:
             
             val = cfg_dict.get(key, default_val)
             var = tk.StringVar(value=val)
-            
-            # Combobox centrat în interiorul chenarului
             cb = ttk.Combobox(frame, textvariable=var, values=options, state="readonly", width=22, justify="center")
             cb.pack(pady=(2, 4))
             widgets_map[key] = var
 
-            # Text de descriere centrat frumos sub meniu
             desc_label = ttk.Label(frame, font=self.f_hk, foreground="#555555", wraplength=250, justify="center", anchor="center")
             desc_label.pack(fill="x", padx=2)
 
@@ -1750,203 +1839,59 @@ class Main:
             else:
                 grid_pos[tab] = (0, row + 1)
 
-        LANG_OPTIONS = [
-            "rum,ron,ro,en,it",
-            "rum,ron,ro",
-            "en,ro,it",
-            "ro,en",
-            "it,en,ro",
-            "en,it,ro",
-            "de,en,ro",
-            "fr,en,ro"
-        ]
+        LANG_OPTIONS = ["rum,ron,ro,en,it", "rum,ron,ro", "en,ro,it", "ro,en", "it,en,ro", "en,it,ro", "de,en,ro", "fr,en,ro"]
 
-        # Tab Video & Randare
         add_opt(tab_v, "profile", ("Profil Randare", "Rendering Profile", "Profilo Rendering"),
                 ("Setează profilul calității video.", "Set video quality profile.", "Imposta il profilo di qualità video."), "gpu-hq", ["gpu-hq", "fast", "default"],
-                choice_descs={
-                    "gpu-hq": ("Calitate maximă (recomandat pentru claritate)", "Top quality (recommended)", "Massima qualità"),
-                    "fast": ("Performanță crescută, sacrifică din filtre", "Higher performance, lower filters", "Prestazioni elevate"),
-                    "default": ("Profilul standard simplu mpv", "Simple standard profile", "Profilo standard semplice")
-                })
-        
+                choice_descs={"gpu-hq": ("Calitate maximă", "Top quality", "Massima qualità"), "fast": ("Performanță crescută", "Higher performance", "Prestazioni elevate"), "default": ("Standard", "Default", "Standard")})
         add_opt(tab_v, "hwdec", ("Accelerare Hardware", "Hardware Acceleration", "Accelerazione Hardware"),
-                ("Decodare video pe GPU pentru a reduce CPU.", "GPU video decoding to reduce CPU load.", "Decodifica video GPU per ridurre il carico CPU."), "auto", ["auto", "yes", "no", "auto-copy", "nvdec", "vaapi"],
-                choice_descs={
-                    "auto": ("Detectează automat cel mai bun mod hardware", "Auto-detect best hardware mode", "Rileva automaticamente"),
-                    "yes": ("Activează decodarea hardware directă pe GPU", "Enable direct GPU hardware decoding", "Abilita decodifica hardware"),
-                    "no": ("Decodare exclusiv software pe procesor (CPU)", "Software-only CPU decoding", "Solo decodifica software CPU"),
-                    "auto-copy": ("Decodare cu copiere automată în memorie", "HW decode with memory auto-copy", "Copia automatica memoria"),
-                    "nvdec": ("Accelerare dedicată plăcilor NVIDIA", "Dedicated NVIDIA cards acceleration", "Accelerazione schede NVIDIA"),
-                    "vaapi": ("Interfață standard VA-API pentru Intel/AMD", "Standard VA-API for Intel and AMD", "Standard VA-API")
-                })
-
+                ("Decodare video pe GPU.", "GPU video decoding.", "Decodifica video GPU."), "auto", ["auto", "yes", "no", "auto-copy", "nvdec", "vaapi"])
         add_opt(tab_v, "vo", ("Driver Video (VO)", "Video Output Driver", "Driver Output Video"),
-                ("Interfața grafică utilizată pentru redare.", "Graphics interface used for rendering video.", "Interfaccia grafica usata per il rendering."), "gpu", ["gpu", "gpu-next", "xv", "x11"],
-                choice_descs={
-                    "gpu": ("Output OpenGL/Vulkan modern și stabil", "Modern stable OpenGL/Vulkan output", "Output moderno stabile"),
-                    "gpu-next": ("Motor experimental bazat pe libplacebo", "Experimental next-gen engine", "Motore sperimentale nuovo"),
-                    "xv": ("XVideo legacy pentru plăci mai vechi", "Legacy XVideo for older hardware", "XVideo legacy"),
-                    "x11": ("Redare de bază direct pe fereastra X11", "Basic X11 window rendering", "Rendering base X11")
-                })
-
+                ("Interfața grafică.", "Graphics interface.", "Interfaccia grafica."), "gpu", ["gpu", "gpu-next", "xv", "x11"])
         add_opt(tab_v, "gpu-api", ("API Grafic", "Graphics API", "API Grafica"),
-                ("Modul de interacțiune cu placa video.", "Graphic card backend interface.", "Interfaccia backend scheda video."), "opengl", ["opengl", "vulkan", "auto"],
-                choice_descs={
-                    "opengl": ("API compatibil și stabil pe majoritatea plăcilor", "Stable and compatible API", "API stabile e compatibile"),
-                    "vulkan": ("API grafic modern de înaltă performanță", "Modern high-performance graphics API", "API grafico moderno alte prestazioni"),
-                    "auto": ("Selectează automat API-ul optim", "Automatically select optimal API", "Selezione automatica")
-                })
-
-        add_opt(tab_v, "scale", ("Scalare Luma (Scale)", "Luma Scaler", "Ridimensionamento Luma"),
-                ("Algoritm de scalare pentru claritate video.", "Scaling algorithm for video sharpness.", "Algoritmo di ridimensionamento per la nitidezza."), "spline36", ["spline36", "mitchell", "bicubic", "lanczos", "bilinear"],
-                choice_descs={
-                    "spline36": ("Echilibru excelent între claritate și artefacte", "Excellent balance of sharpness and artifacts", "Ottimo bilanciamento nitidezza"),
-                    "mitchell": ("Imagine netedă, reduce zgomotul", "Smooth image, reduces ringing", "Immagine uniforme"),
-                    "bicubic": ("Standard rapid și eficient", "Fast and efficient standard", "Standard veloce ed efficiente"),
-                    "lanczos": ("Foarte clar, poate genera margini luminoase", "Very sharp, can produce slight ringing", "Molto nitido"),
-                    "bilinear": ("Cel mai rapid, dar cu claritate redusă", "Fastest, lowest quality", "Più veloce, minor qualità")
-                })
-
-        add_opt(tab_v, "cscale", ("Scalare Croma (Cscale)", "Chroma Scaler", "Ridimensionamento Croma"),
-                ("Algoritm dedicat scalării culorilor.", "Dedicated algorithm for color channels scaling.", "Algoritmo dedicato per i canali colore."), "mitchell", ["mitchell", "spline36", "bicubic", "bilinear"],
-                choice_descs={
-                    "mitchell": ("Culori naturale și bine delimitate", "Natural and well-defined colors", "Colori naturali e definiti"),
-                    "spline36": ("Precizie ridicată la tranzițiile de culoare", "High precision in color transitions", "Alta precisione nei colori"),
-                    "bicubic": ("Randare rapidă a canalelor de croma", "Fast chroma channels rendering", "Rendering rapido dei colori"),
-                    "bilinear": ("Consum minim de resurse", "Minimum resource usage", "Minimo consumo di risorse")
-                })
-
+                ("Modul de interacțiune cu placa video.", "Backend interface.", "Interfaccia backend."), "opengl", ["opengl", "vulkan", "auto"])
+        add_opt(tab_v, "scale", ("Scalare Luma", "Luma Scaler", "Ridimensionamento Luma"),
+                ("Algoritm de scalare.", "Scaling algorithm.", "Algoritmo."), "spline36", ["spline36", "mitchell", "bicubic", "lanczos", "bilinear"])
+        add_opt(tab_v, "cscale", ("Scalare Croma", "Chroma Scaler", "Ridimensionamento Croma"),
+                ("Scalare culori.", "Chroma scaling.", "Scala colori."), "mitchell", ["mitchell", "spline36", "bicubic", "bilinear"])
         add_opt(tab_v, "dither-depth", ("Profunzime Dithering", "Dither Depth", "Profondità Dithering"),
-                ("Reduce artefactele de culoare pe ecrane.", "Reduces color banding artifacts.", "Riduce gli artefatti di banding colore."), "auto", ["auto", "8", "10", "no"],
-                choice_descs={
-                    "auto": ("Detectează adâncimea corectă a ecranului", "Auto-detect screen bit depth", "Rileva automatica profondità"),
-                    "8": ("Forțează dithering pe 8 biți", "Force 8-bit dithering", "Forza dithering a 8 bit"),
-                    "10": ("Forțează dithering pe 10 biți", "Force 10-bit dithering", "Forza dithering a 10 bit"),
-                    "no": ("Dezactivează complet dithering-ul", "Disable dithering completely", "Disabilita completamente")
-                })
-
+                ("Reduce artefactele.", "Reduces banding.", "Riduce artefatti."), "auto", ["auto", "8", "10", "no"])
         add_opt(tab_v, "cursor-autohide", ("Ascundere Cursor", "Cursor Autohide", "Nascondi Cursore"),
-                ("Timpul în milisecunde până la ascundere.", "Delay in ms before hiding mouse cursor.", "Ritardo in ms prima di nascondere il cursore."), "1000", ["500", "1000", "2000", "always", "no"],
-                choice_descs={
-                    "500": ("Ascunde cursorul după 0.5 secunde", "Hide cursor quickly after 0.5s", "Nascondi rapidamente"),
-                    "1000": ("Ascunde cursorul după 1 secundă", "Hide after 1 second of inactivity", "Nascondi dopo 1 secondo"),
-                    "2000": ("Ascunde cursorul după 2 secunde", "Hide after 2 seconds", "Nascondi dopo 2 secondi"),
-                    "always": ("Ascunde cursorul permanent", "Always hide cursor permanently", "Nascondi sempre"),
-                    "no": ("Cursorul rămâne mereu vizibil", "Cursor remains always visible", "Cursore sempre visibile")
-                })
+                ("Timp ascundere.", "Hide delay.", "Ritardo."), "1000", ["500", "1000", "2000", "always", "no"])
 
-        # Tab Culori & Gamma
         add_opt(tab_c, "video-output-levels", ("Nivel Ieșire Culori", "Color Output Levels", "Livelli Output Colore"),
-                ("Gama dinamică RGB (Full 0-255 recomandat).", "RGB dynamic range (Full 0-255 recommended).", "Gamma dinamica RGB (Full 0-255 consigliata)."), "full", ["full", "limited", "auto"],
-                choice_descs={
-                    "full": ("Gamă completă 0-255, negru profund (recomandat)", "Full range 0-255, deep blacks (recommended)", "Gamma completa 0-255"),
-                    "limited": ("Gamă limitată 16-235 pentru televizoare vechi", "Limited range 16-235 for legacy TVs", "Gamma limitata 16-235"),
-                    "auto": ("Selectează automat nivelul optim", "Automatically select output level", "Selezione automatica livello")
-                })
-
+                ("Gamă RGB.", "RGB range.", "Gamma RGB."), "full", ["full", "limited", "auto"])
         add_opt(tab_c, "target-prim", ("Spațiu de Culoare", "Target Primaries", "Spazio Colore"),
-                ("Profilul de culori primare al ecranului.", "Display primary color space profile.", "Profilo spazio colore primario del display."), "bt.709", ["bt.709", "bt.2020", "srgb", "auto"],
-                choice_descs={
-                    "bt.709": ("Standard HD rec.709 pentru TV și conținut uzual", "HD standard rec.709 for regular TV", "Standard HD rec.709"),
-                    "bt.2020": ("Standard extins pentru 4K UHD modern", "Extended standard for modern 4K UHD", "Standard esteso 4K UHD"),
-                    "srgb": ("Spațiu standard pentru monitoare PC", "Standard space for PC monitors", "Spazio standard monitor PC"),
-                    "auto": ("Detectează spațiul de culoare automat", "Auto-detect color primaries", "Rileva automaticamente")
-                })
-
-        add_opt(tab_c, "target-trc", ("Curba de Transfer Gamma", "Target TRC / Gamma", "Curva Gamma"),
-                ("Curba de corecție gamma pentru luminozitate.", "Gamma transfer curve for proper luminance.", "Curva di correzione gamma."), "bt.1886", ["bt.1886", "srgb", "pq", "hlg", "auto"],
-                choice_descs={
-                    "bt.1886": ("Standard universal pentru ecrane TV și monitoare", "Universal standard for screens and TVs", "Standard universale TV"),
-                    "srgb": ("Curbă gamma specifică sRGB", "Specific sRGB gamma curve", "Curva gamma sRGB"),
-                    "pq": ("Curbă HDR (Perceptual Quantizer)", "HDR curve (Perceptual Quantizer)", "Curva HDR PQ"),
-                    "hlg": ("Curbă HDR HLG pentru transmisii live", "HLG HDR curve for live TV broadcasts", "Curva HDR HLG")
-                })
-
+                ("Profil culori.", "Color space.", "Spazio colore."), "bt.709", ["bt.709", "bt.2020", "srgb", "auto"])
+        add_opt(tab_c, "target-trc", ("Curba Gamma", "Target TRC / Gamma", "Curva Gamma"),
+                ("Corecție gamma.", "Gamma curve.", "Curva gamma."), "bt.1886", ["bt.1886", "srgb", "pq", "hlg", "auto"])
         add_opt(tab_c, "contrast", ("Contrast Video", "Video Contrast", "Contrasto Video"),
-                ("Modifică nivelul de contrast al imaginii.", "Modifies video playback contrast level.", "Modifica il livello di contrasto video."), "0", ["-20", "-10", "0", "10", "20"],
-                choice_descs={
-                    "0": ("Nivel de contrast standard nemodificat", "Standard unchanged contrast level", "Livello standard"),
-                    "10": ("Crește ușor contrastul imaginii", "Slightly increases image contrast", "Aumenta leggermente il contrasto"),
-                    "20": ("Crește puternic contrastul imaginii", "Strongly increases contrast", "Aumenta fortemente il contrasto"),
-                    "-10": ("Reduce ușor contrastul imaginii", "Slightly decreases contrast", "Riduce leggermente il contrasto")
-                })
+                ("Nivel contrast.", "Contrast level.", "Contrasto."), "0", ["-20", "-10", "0", "10", "20"])
 
-        # Tab Audio & Limbă
         add_opt(tab_a, "alang", ("Ordinea Limbilor Audio", "Audio Language Priority", "Priorità Lingua Audio"),
-                ("Alege ordinea preferată pentru audio.", "Select preferred order for audio languages.", "Seleziona l'ordine preferito per l'audio."), "rum,ron,ro,en,it", LANG_OPTIONS,
-                choice_descs={
-                    "rum,ron,ro,en,it": ("Prioritate Română, apoi Engleză și Italiană", "Priority Romanian, then English and Italian", "Priorità Romeno, poi Inglese e Italiano"),
-                    "rum,ron,ro": ("Exclusiv limba Română", "Romanian language exclusively", "Solo lingua romena"),
-                    "en,ro,it": ("Prioritate Engleză, apoi Română", "Priority English, then Romanian", "Priorità Inglese, poi Romeno"),
-                    "ro,en": ("Română și Engleză", "Romanian and English", "Romeno e Inglese")
-                })
-
+                ("Limbile audio.", "Audio languages.", "Lingue audio."), "rum,ron,ro,en,it", LANG_OPTIONS)
         add_opt(tab_a, "af", ("Filtru / Normalizare Audio", "Audio Filter / Normalization", "Filtro / Normalizzazione Audio"),
-                ("Comprimă dinamica sunetului pentru volum uniform.", "Compresses dynamic range for uniform volume.", "Comprime la gamma dinamica per volume uniforme."), "none", ["none", "drunoid", "loudnorm"],
-                choice_descs={
-                    "none": ("Fără filtre audio aplicate (sunet original direct)", "No audio filters applied (direct original sound)", "Nessun filtro audio applicato"),
-                    "drunoid": ("Normalizare dinamică optimizată pentru voce", "Dynamic normalization optimized for speech", "Normalizzazione dinamica"),
-                    "loudnorm": ("Normalizare standard EBU R128 a volumului", "Standard EBU R128 loudness normalization", "Normalizzazione standard EBU R128")
-                })
-
+                ("Filtre sunet.", "Audio filters.", "Filtri audio."), "none", ["none", "drunoid", "loudnorm"])
         add_opt(tab_a, "volume-max", ("Volum Maxim (%)", "Volume Max Limit (%)", "Volume Massimo (%)"),
-                ("Limita superioară a amplificării peste 100%.", "Upper volume amplification limit over 100%.", "Limite superiore amplificazione volume oltre 100%."), "130", ["100", "120", "130", "150", "200"],
-                choice_descs={
-                    "100": ("Volum maxim limitat strict la 100%", "Volume strictly limited to 100%", "Volume massimo limitato al 100%"),
-                    "130": ("Amplificare maximă de 130% (recomandat)", "Maximum amplification 130% (recommended)", "Amplificazione massima 130%"),
-                    "150": ("Amplificare puternică până la 150%", "Strong amplification up to 150%", "Forte amplificazione fino al 150%"),
-                    "200": ("Amplificare dublă până la 200%", "Double amplification up to 200%", "Doppia amplificazione fino al 200%")
-                })
+                ("Limită volum.", "Volume limit.", "Limite volume."), "130", ["100", "120", "130", "150", "200"])
 
-        # Tab Subtitrări & Font
         add_opt(tab_s, "slang", ("Ordinea Limbilor Subtitrare", "Subtitle Language Priority", "Priorità Lingua Sottotitoli"),
-                ("Alege ordinea preferată pentru subtitrări.", "Select preferred order for subtitles.", "Seleziona l'ordine preferito per i sottotitoli."), "rum,ron,ro,en,it", LANG_OPTIONS,
-                choice_descs={
-                    "rum,ron,ro,en,it": ("Prioritate Română, apoi Engleză și Italiană", "Priority Romanian, then English and Italian", "Priorità Romeno, poi Inglese e Italiano"),
-                    "rum,ron,ro": ("Exclusiv subtitrare în limba Română", "Romanian subtitles exclusively", "Solo sottotitoli in romeno"),
-                    "en,ro,it": ("Prioritate Engleză, apoi Română", "Priority English, then Romanian", "Priorità Inglese, poi Romeno"),
-                    "ro,en": ("Română și Engleză", "Romanian and English", "Romeno e Inglese")
-                })
-
+                ("Limbile subtitrărilor.", "Subtitle languages.", "Lingue sottotitoli."), "rum,ron,ro,en,it", LANG_OPTIONS)
         add_opt(tab_s, "sub-font-size", ("Dimensiune Font Subtitrare", "Subtitle Font Size", "Dimensione Carattere Sottotitoli"),
-                ("Mărimea textului pentru subtitrări.", "Text size for rendered subtitles.", "Dimensione del testo per i sottotitoli."), "36", ["28", "32", "36", "40", "44", "48"],
-                choice_descs={
-                    "28": ("Font compact, ideal pentru ecrane mici", "Compact font for small screens", "Font compatto"),
-                    "36": ("Dimensiune standard echilibrată (recomandat)", "Balanced standard size (recommended)", "Dimensione standard bilanciata"),
-                    "44": ("Font mare, ușor de citit de la distanță", "Large font, easily readable from distance", "Font grande facilmente leggibile"),
-                    "48": ("Font foarte mare", "Very large font size", "Font molto grande")
-                })
-
+                ("Mărime font.", "Font size.", "Dimensione font."), "36", ["28", "32", "36", "40", "44", "48"])
         add_opt(tab_s, "sub-visibility", ("Vizibilitate Subtitrări", "Subtitles Visibility", "Visibilità Sottotitoli"),
-                ("Afișarea automată a subtitrărilor la pornire.", "Automatic subtitles display upon start.", "Visualizzazione automatica dei sottotitoli."), "yes", ["yes", "no"],
-                choice_descs={
-                    "yes": ("Activează automat subtitrările disponibile", "Automatically enable available subtitles", "Attiva automaticamente i sottotitoli"),
-                    "no": ("Dezactivează afișarea automată a subtitrărilor", "Disable automatic subtitles display", "Disabilita visualizzazione automatica")
-                })
+                ("Afișare automată.", "Auto display.", "Visualizzazione automatica."), "yes", ["yes", "no"])
 
-        # Tab Avansat & Cache
-        add_opt(tab_adv, "demuxer-readahead-seconds", ("Cache Readahead (secunde)", "Readahead Cache (seconds)", "Cache Readahead (secondi)"),
-                ("Cantitatea de flux stocată în buffer.", "Stream amount buffered in memory ahead of playback.", "Quantità di flusso memorizzata in buffer."), "5", ["2", "5", "10"],
-                choice_descs={
-                    "2": ("Buffer scurt pentru pornire rapidă", "Short buffer for fast startup", "Buffer corto per avvio rapido"),
-                    "5": ("Buffer stabil de 5 secunde (recomandat)", "Stable 5s buffer (recommended for live TV)", "Buffer stabile di 5 secondi"),
-                    "10": ("Buffer mare de 10 secunde pentru semnal instabil", "Large 10s buffer for unstable signal", "Buffer grande di 10 secondi")
-                })
-
+        add_opt(tab_adv, "demuxer-readahead-seconds", ("Cache Readahead", "Readahead Cache", "Cache Readahead"),
+                ("Buffer flux.", "Buffer stream.", "Buffer flusso."), "5", ["2", "5", "10"])
         add_opt(tab_adv, "keep-open", ("Menține Player Deschis", "Keep Player Open", "Mantieni Lettore Aperto"),
-                ("Evită închiderea ferestrei la pierderea semnalului.", "Prevents window closing on brief signal loss.", "Evita la chiusura della finestra se manca il segnale."), "yes", ["yes", "always", "no"],
-                choice_descs={
-                    "yes": ("Menține fereastra deschisă la finalul fluxului", "Keep player window open on stream end", "Mantieni finestra aperta"),
-                    "always": ("Menține playerul deschis permanent", "Keep player open permanently", "Mantieni sempre aperto"),
-                    "no": ("Închide fereastra imediat ce fluxul se oprește", "Close window immediately on stream stop", "Chiudi alla fine")
-                })
+                ("Evită închiderea.", "Keep open.", "Tieni aperto."), "yes", ["yes", "always", "no"])
 
         btn_frame = ttk.Frame(w, padding=6)
         btn_frame.pack(fill="x", side="bottom")
 
         def save_config():
-            new_lines = ["# MPV configuration file (Teleops DVB Complete Advanced Editor)"]
+            new_lines = ["# MPV configuration file (Teleops DVB)"]
             for k, var in widgets_map.items():
                 val = var.get().strip()
                 if val and val != "none": new_lines.append(f"{k}={val}")
