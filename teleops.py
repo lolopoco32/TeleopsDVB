@@ -278,8 +278,6 @@ T = {  # cheie: (ro, en, it)
     "hk_fav_k": ("CTRL + Click Stânga", "CTRL + Left Click", "CTRL + Clic sinistro"),
     "hk_play": ("Redă canalul", "Play channel", "Riproduci il canale"),
     "hk_play_k": ("Dublu click / Enter", "Double click / Enter", "Doppio clic / Invio"),
-    "hk_cfg": ("Ascunde/arată setările", "Hide/show settings", "Nascondi/mostra impostazioni"),
-    "hk_cfg_k": ("Click pe titlu", "Click on title", "Clic sul titolo"),
     "hk_ui": ("Ascunde/arată interfața", "Hide/show interface", "Nascondi/mostra interfaccia"),
     "hk_ui_k": (". / dublu click pe video", ". / double click on video", ". / doppio clic sul video"),
     "hk_fs": ("Ecran complet", "Fullscreen", "Schermo intero"),
@@ -302,6 +300,8 @@ T = {  # cheie: (ro, en, it)
     "osd_loading": ("Se încarcă EPG...", "Loading EPG...", "Caricamento EPG..."),
     "osd_na": ("Indisponibil", "Unavailable", "Non disponibile"),
     "scrambled": ("Canal codat (criptat): nu poate fi redat fără card/CAM.", "Scrambled (encrypted) channel: it can't be played without a card/CAM.", "Canale criptato: non riproducibile senza card/CAM."),
+    "chlist_btn": ("📺 Lista Canale TV", "📺 TV Channel List", "📺 Elenco canali TV"),
+    "cfg_tip": ("Setări / Listă canale", "Settings / Channel list", "Impostazioni / Elenco canali"),
     "ca_btn": ("🔑 Detectează canalele codate", "🔑 Detect scrambled channels", "🔑 Rileva canali criptati"),
     "ca_done": ("Detecție finalizată! Canale codate:", "Detection finished! Scrambled channels:", "Rilevamento completato! Canali criptati:"),
     "already": ("Teleops DVB rulează deja.", "Teleops DVB is already running.", "Teleops DVB è già in esecuzione."),
@@ -2508,13 +2508,14 @@ class Streamer:
 VOL_MAX = 130           # volume-max implicit în mpv
 TXT_DARK = "#000000"    # culoare text implicită
 LIST_MIN_H = 150        # înălțimea minimă (px) a listei de canale la strângerea ferestrei
+CFG_W, CFG_GAP = 36, 5     # lățimea butonului ⚙ și spațiul dintre el și butonul EPG
 PANEL_W = 320           # lățimea fixă a panoului cu comenzi
 VIDEO_MIN_W = 480       # lățimea minimă a zonei video
 
 HOTKEYS = (("hk_play", "hk_play_k"), ("hk_fav", "hk_fav_k"), ("hk_search", "hk_search_k"),      # lista de canale
            ("hk_epg", "hk_epg_k"), ("hk_rec", "hk_rec_k"),                                      # canalul curent
            ("hk_osc", "hk_osc_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),                  # video
-           ("hk_cfg", "hk_cfg_k"), ("hk_quit", "hk_quit_k"))                                    # program
+           ("hk_quit", "hk_quit_k"))                                                            # program
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3258,7 +3259,7 @@ class Main:
         st.theme_use("default")
         
         st.configure("TLabel", font=self.f_bold)
-        st.configure("Brand.TLabel", font=f_brand)
+        st.configure("Brand.TLabel", font=f_brand, foreground="#555555")   # aceeași culoare ca mesajul „Se încarcă...”
         st.configure("Rec.TLabel", font=self.f_bold, foreground="#dc2626")
         st.configure("Epg.TLabel", font=self.f_norm)
         st.configure("EpgB.TLabel", font=self.f_bold)
@@ -3296,8 +3297,8 @@ class Main:
         top = ttk.Frame(main)
         top.pack(fill="x", pady=5)
         top.columnconfigure(0, weight=1)
-        self.brand = ttk.Label(top, text=TITLE, style="Brand.TLabel", anchor="center", cursor="hand2")
-        self.chrome.bind_drag(self.brand, click=self.toggle_tuner)   # click = tuner, tragere = mută fereastra
+        self.brand = ttk.Label(top, text=TITLE, style="Brand.TLabel", anchor="center")
+        self.chrome.bind_drag(self.brand)   # tragere = mută fereastra
         self.brand.grid(row=0, column=0, sticky="ew")
         self.rec_lbl = ttk.Label(main, style="Rec.TLabel", anchor="center")
         self.top = top
@@ -3324,6 +3325,7 @@ class Main:
 
         self.scan_c_btn = self._btn(tc, "scan_c", lambda: self.start_scan("dvbc"))
         self.scan_t_btn = self._btn(tc, "scan_t", lambda: self.start_scan("dvbt"))
+        self.chlist_btn = self._btn(tc, "chlist_btn", lambda: self.set_settings_view(False))
         self.ca_btn = self._btn(tc, "ca_btn", self.start_ca_detect)
         self._btn(tc, "cfg_mpv", self.open_mpv_config)
         self._btn(tc, "side_btn", self.swap_side)
@@ -3403,7 +3405,18 @@ class Main:
         self.vol_slider = ttk.Scale(vol, from_=0, to=VOL_MAX, orient="horizontal", command=self.on_volume)
         self.vol_slider.pack(side="left", fill="x", expand=True, padx=6)
 
-        self.epg_btn = self._btn(bottom, "epg_btn", self.show_epg, pady=(5, 0))
+        # Butonul EPG ocupă toată lățimea (textul rămâne centrat ca la cele de jos); ⚙ e suprapus pe marginea dreaptă
+        epg_row = ttk.Frame(bottom)
+        epg_row.pack(fill="x", pady=(5, 0))
+        # Butonul EPG se oprește cu 5 px înainte de ⚙ (5 px = aceeași distanță ca între butoanele de pe verticală);
+        # padding-ul stâng suplimentar (36 + 5) readuce textul exact în centrul lățimii întregi.
+        ttk.Style().configure("Epg.TButton", padding=(3 + CFG_W + CFG_GAP, 3, 3, 3))
+        self.epg_btn = ttk.Button(epg_row, command=self.show_epg, style="Epg.TButton")
+        self.epg_btn.pack(fill="x", padx=(0, CFG_W + CFG_GAP))
+        self.tr.append((self.epg_btn, "epg_btn"))
+        self.cfg_btn = ttk.Button(epg_row, text="⚙", command=self.toggle_tuner)
+        self.cfg_btn.place(relx=1.0, rely=0.0, anchor="ne", relheight=1.0, width=CFG_W)
+        self.cfg_tip = Tip(self.cfg_btn, "")
         self.rec_btn = self._btn(bottom, "rec_off", lambda: self.set_recording(not self.rec_on), pady=(5, 0))
         self.stop_btn = self._btn(bottom, "stop_play", self.on_stop_btn, pady=(5, 0))
 
@@ -3578,6 +3591,7 @@ class Main:
             w.configure(text=self.t(key))
         self.rec_btn.configure(text=self.t("rec_on" if self.rec_on else "rec_off"))
         self.refresh_tip.text = self.t("refresh_tip")
+        self.cfg_tip.text = self.t("cfg_tip")
         self._sync_stop_btn()
         self.update_video_msg()
         if self._ph_active:
@@ -3864,6 +3878,7 @@ class Main:
     def reload(self):
         self.tv_channels, self.radio_channels, self.locked = load_channels()
         self._radio_names = {c for c, _ in self.radio_channels}
+        self.set_enabled(self.chlist_btn, bool(self.tv_channels or self.radio_channels))
         self.fill_channels()
 
     def fill_channels(self):
