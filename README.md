@@ -66,7 +66,4 @@ chmod +x teleops.py
 
 ## 📄 License
 
-This project is open-source and available for personal use, modification, and distribution under the MIT License.
-
-<img width="1932" height="1090" alt="Screenshot_20261103_075441" src="https://github.com/user-attachments/assets/5f593e46-ad12-4d8f-ac84-c8d1b272f8da" />
-<img width="1418" height="1028" alt="Screenshot_20261103_081626" src="https://github.com/user-attachments/assets/39b0218b-b809-49a2-927a-45a20026769e" />
+This project is licensed under the GNU General Public License v3.0 (GPLv3). Anyone is free to modify and redistribute this software, provided that any derivative works are also open-sourced under the same license terms.
