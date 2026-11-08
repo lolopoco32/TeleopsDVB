@@ -22,7 +22,7 @@ HARTA SECȚIUNILOR
     i18n     Texte ale interfeței (ro / en / it)
              · strings: Textele interfeței (ro, en, it). Dialogul mpv: secțiunea i18n/strings_mpv.
              · strings_mpv: Texte pentru dialogul „Configurează MPV”. Format: cheie: (ro, en, it).
-             · strings_rec: Texte pentru înregistrările programate din EPG. Format: cheie: (ro, en, it).
+             · strings_rec: Texte pentru înregistrările programate și vizionările programate din EPG. Format: cheie: (ro, en, it).
              · translate: Traduceri: `tr(lang, cheie)`.
     system   Integrare cu sistemul: mediu, X11, D-Bus, anti-sleep, editor, instanță unică
              · dbus_min: Client D-Bus minimal, fără dependențe: doar apeluri de metodă pe session bus.
@@ -38,8 +38,9 @@ HARTA SECȚIUNILOR
              · tuners: Detectarea tunerelor DVB.
              · scanning: Scanarea canalelor, „încălzirea” tunerului și detecția canalelor codate.
              · schedule: Programarea înregistrărilor din EPG: lista de joburi + deciziile (fără UI, fără Tk, testabil).
+             · watch: „Vreau să vizionez”: comutarea automată pe canalul unei emisiuni, fără conflict cu înregistrările.
     player   mpv + dvbv5-zap: redare, script OSC, opțiuni și validare mpv
-             · osc_script: Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute). Se scrie în CONF_DIR la fiecare pornire.
+             · osc_script: Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute, info video/audio, blocarea seek-ului). Se scrie în CONF_DIR la fiecare pornire.
              · mpv_options: Opțiunile mpv oferite în dialogul „Configurează MPV” și transformarea lor în linii de mpv.conf.
              · mpv_check: Validarea unei configurații mpv înainte s-o salvăm: pornește scurt mpv pe o sursă de test.
              · streamer: Redarea unui canal: dvbv5-zap -> (filtru TS) -> mpv încorporat în fereastra Tk, cu control prin IPC.
@@ -59,6 +60,7 @@ CUM ADAUGI...
     textele (`mo_<cheie>`, `mh_<cheie>`, `mc_*`) merg în secțiunea i18n/strings_mpv.
   · un text: i18n/strings (cheie -> (ro, en, it)).
   · o decizie de programare/înregistrare: core/schedule (funcția `plan`), apoi execuția în `Main._run_job`.
+  · o decizie de comutare automată („Vreau să vizionez”): core/watch (funcția `watch_plan`), apoi execuția în `Main._watch_tick`.
 """
 
 import configparser
@@ -106,6 +108,7 @@ MPV_CONF = CONF_DIR / "mpv.conf"
 MPV_CONF_BAK = CONF_DIR / "mpv.conf.bak"           # copia de siguranță de dinainte de prima modificare automată
 SETTINGS = CONF_DIR / "settings.json"
 SCHEDULE = CONF_DIR / "schedule.json"              # înregistrările programate din EPG
+WATCH = CONF_DIR / "watch.json"                    # emisiunile marcate „Vreau să vizionez” (comutare automată)
 SERVICES = CONF_DIR / "services.json"              # tip serviciu + flag 'codat' (din SDT), scris după scanare
 OSC_PATH = CONF_DIR / "teleops-osc.lua"
 REC_DIR = Path.home() / "Videos" / "TeleopsDVB"
@@ -158,16 +161,14 @@ vo=gpu
 hwdec=auto
 gpu-context=auto
 video-output-levels=full
-target-prim=bt.709
-target-trc=bt.1886
+target-prim=auto
+target-trc=auto
 scale=spline36
 cscale=mitchell
 dscale=mitchell
 dither-depth=auto
 temporal-dither=yes
 keep-open=yes
-autofit-smaller=1920x1080
-autofit-larger=90%x90%
 cursor-autohide=1000
 
 # Subtitrări (sid=auto și sub-visibility=yes sunt forțate și din linia de comandă)
@@ -272,7 +273,7 @@ T = {  # cheie: (ro, en, it)
     "hk_title": ("⌨️ Comenzi rapide", "⌨️ Hotkeys", "⌨️ Scorciatoie"),
     "hk_search": ("Arată/ascunde căutarea", "Show/hide search", "Mostra/nascondi ricerca"),
     "hk_search_k": ("Click Dreapta pe listă", "Right Click on list", "Clic destro sulla lista"),
-    "hk_epg": ("Informații EPG", "EPG info", "Info EPG"),
+    "hk_epg": ("Informații EPG și semnal", "EPG and signal info", "Info EPG e segnale"),
     "hk_epg_k": ("CTRL + I", "CTRL + I", "CTRL + I"),
     "hk_fav": ("Adaugă / Elimină din Favorite", "Add / Remove Favorites", "Aggiungi / Rimuovi Preferiti"),
     "hk_fav_k": ("CTRL + Click Stânga", "CTRL + Left Click", "CTRL + Clic sinistro"),
@@ -299,6 +300,11 @@ T = {  # cheie: (ro, en, it)
     # Localizare OSD MPV
     "osd_loading": ("Se încarcă EPG...", "Loading EPG...", "Caricamento EPG..."),
     "osd_na": ("Indisponibil", "Unavailable", "Non disponibile"),
+    # Informații video/audio afișate de mpv la pornirea canalului (stânga jos)
+    "info_video": ("Video", "Video", "Video"),
+    "info_audio": ("Audio", "Audio", "Audio"),
+    "info_wait": ("se detectează...", "detecting...", "rilevamento..."),
+    "info_noaud": ("fără audio", "no audio", "nessun audio"),
     "scrambled": ("Canal codat (criptat): nu poate fi redat fără card/CAM.", "Scrambled (encrypted) channel: it can't be played without a card/CAM.", "Canale criptato: non riproducibile senza card/CAM."),
     "chlist_btn": ("📺 Lista Canale TV", "📺 TV Channel List", "📺 Elenco canali TV"),
     "cfg_tip": ("Setări / Listă canale", "Settings / Channel list", "Impostazioni / Elenco canali"),
@@ -594,6 +600,32 @@ REC_T = {
                    "La registrazione programmata «{title}» ({channel}) è stata annullata: impossibile avviare il canale."),
     "sched_started": ("● Înregistrare programată pornită: {title}", "● Scheduled recording started: {title}", "● Registrazione programmata avviata: {title}"),
     "sched_finished": ("Înregistrare programată încheiată: {title}", "Scheduled recording finished: {title}", "Registrazione programmata terminata: {title}"),
+    "rec_watch_dropped": ("Vizionarea programată pentru {items} a fost anulată: se suprapune cu înregistrarea, care are prioritate.",
+                          "The scheduled viewing of {items} was cancelled: it overlaps the recording, which has priority.",
+                          "La visione programmata di {items} è stata annullata: si sovrappone alla registrazione, che ha la priorità."),
+    # „Vreau să vizionez”: comutare automată pe canalul emisiunii
+    "epg_watch_btn": ("📺 Vreau să vizionez", "📺 I want to watch", "📺 Voglio guardare"),
+    "epg_watch_cancel": ("✖ Anulează vizionarea", "✖ Cancel viewing", "✖ Annulla la visione"),
+    "epg_watch_tip": ("Comută singur pe acest canal cu {lead} min înainte de începerea emisiunii, dacă te uiți la alt canal. Nu comută dacă înregistrezi alt canal. 📺 = programată.",
+                      "Switches to this channel by itself {lead} min before the programme starts, if you are watching another channel. It does not switch while another channel is being recorded. 📺 = scheduled.",
+                      "Passa da solo a questo canale {lead} min prima dell'inizio del programma, se stai guardando un altro canale. Non passa se si sta registrando un altro canale. 📺 = programmato."),
+    "epg_watch_added": ("Vizionare programată: emisiunea începe la {start}; se trece automat pe acest canal cu {lead} min înainte.",
+                        "Viewing scheduled: the programme starts at {start}; the player will switch to this channel automatically {lead} min earlier.",
+                        "Visione programmata: il programma inizia alle {start}; si passa automaticamente a questo canale {lead} min prima."),
+    "epg_watch_removed": ("Vizionarea programată a fost anulată.", "The scheduled viewing was cancelled.", "La visione programmata è stata annullata."),
+    "epg_watch_running": ("Emisiunea rulează deja pe canalul curent.", "That programme is already on the current channel.", "Il programma è già in onda sul canale corrente."),
+    "epg_watch_clash": ("Nu s-a programat: în acel interval se înregistrează „{title}” ({channel}), iar tunerul nu poate face ambele. Anulează întâi înregistrarea.",
+                        "Not scheduled: “{title}” ({channel}) is being recorded in that time slot, and the tuner can't do both. Cancel the recording first.",
+                        "Non programmato: in quell'intervallo si registra «{title}» ({channel}) e il sintonizzatore non può fare entrambe le cose. Annulla prima la registrazione."),
+    "watch_skip_rec": ("Nu s-a comutat pe {channel} pentru „{title}”: se înregistrează alt canal.",
+                       "Did not switch to {channel} for “{title}”: another channel is being recorded.",
+                       "Nessun cambio su {channel} per «{title}»: si sta registrando un altro canale."),
+    "watch_skip_busy": ("Nu s-a comutat pe {channel} pentru „{title}”: tunerul e ocupat cu scanarea.",
+                        "Did not switch to {channel} for “{title}”: the tuner is busy scanning.",
+                        "Nessun cambio su {channel} per «{title}»: il sintonizzatore è occupato con la scansione."),
+    "watch_fail": ("Nu s-a putut comuta pe {channel} pentru „{title}”: canalul nu mai există în listă.",
+                   "Could not switch to {channel} for “{title}”: the channel is no longer in the list.",
+                   "Impossibile passare a {channel} per «{title}»: il canale non è più nell'elenco."),
 }
 
 
@@ -1612,6 +1644,10 @@ class RecordingSchedule:
     def finished(self, now):
         return [j for j in self.jobs if j.state == ACTIVE and now >= j.stop]
 
+    def clash(self, channel, begin, end):
+        """Joburile de pe ALT canal a căror fereastră de înregistrare se suprapune cu [begin, end)."""
+        return [j for j in self.jobs if j.channel != channel and j.begin < end and begin < j.stop]
+
     # ---- modificări
     def add(self, channel, title, start, end, now=None):
         """Job nou, sau None dacă emisiunea s-a încheiat deja. Dacă există deja, îl întoarce pe cel existent."""
@@ -1648,6 +1684,123 @@ class RecordingSchedule:
             for ch, title, s, e in json.loads(self.path.read_text(encoding="utf-8")):
                 job = Job(str(ch), str(title), float(s), float(e))
                 if job.stop > now:
+                    self.jobs.append(job)
+        except (OSError, ValueError, TypeError):
+            self.jobs = []
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECȚIUNE core/watch
+#   „Vreau să vizionez”: la începutul unei emisiuni marcate din EPG, aplicația comută singură pe canalul ei
+#   (fără UI, fără Tk, testabil). E independentă de înregistrări: are lista ei (watch.json) și nu înregistrează nimic.
+#
+#   Jobul e activ de la `start - WATCH_LEAD` până la `end`. Aplicația apelează `watch_plan()` la fiecare tick:
+#
+#       wait      -> încă nu e ora
+#       expired   -> emisiunea s-a încheiat fără să comutăm: jobul dispare în liniște
+#       already   -> ești deja pe canal (sau o înregistrare programată îl pune acum): nimic de făcut
+#       switch    -> comută pe canalul emisiunii
+#       skip_rec  -> se înregistrează alt canal (sau o înregistrare programată pe alt canal e în fereastra ei):
+#                    NU comutăm; înregistrarea are prioritate
+#       skip_busy -> tunerul e ocupat (scanare): nu comutăm
+#
+#   Înregistrarea are prioritate (există un singur tuner activ): la programarea unei înregistrări, vizionările suprapuse
+#   pe alt canal se anulează (`WatchSchedule.clash()`); invers, o vizionare peste o înregistrare programată se refuză
+#   (`RecordingSchedule.clash()`), iar la rulare `watch_plan` nu întrerupe niciodată o înregistrare.
+# ──────────────────────────────────────────────────────────────────────────────
+
+WATCH_LEAD = 60             # secunde înainte de începutul emisiunii când comutăm (un minut: nu ne bazăm pe punctualitatea canalelor)
+
+
+@dataclass
+class WatchJob:
+    channel: str
+    title: str
+    start: float            # începutul emisiunii (epoch), conform EPG
+    end: float              # sfârșitul emisiunii (epoch)
+
+    @property
+    def begin(self):
+        """Momentul în care comutăm pe canal."""
+        return self.start - WATCH_LEAD
+
+    @property
+    def key(self):
+        return (self.channel, int(self.start), int(self.end))
+
+
+@dataclass
+class WatchCtx:
+    """Starea aplicației de care depinde decizia."""
+    rec_on: bool            # se înregistrează acum (manual sau printr-un job)
+    cur: object             # canalul de pe ecran (str) sau None
+    has_stream: bool        # există un flux pornit
+    busy: bool              # tunerul e ocupat cu altceva (scanare)
+
+
+def watch_plan(job, ctx, now, rec_jobs=()):
+    if now >= job.end:
+        return "expired"
+    if now < job.begin:
+        return "wait"
+    if ctx.has_stream and ctx.cur == job.channel:
+        return "already"
+    if any(r.channel == job.channel and r.begin <= now < r.stop for r in rec_jobs):
+        return "already"                # înregistrarea programată pe același canal îl pornește ea însăși
+    if ctx.rec_on or any(r.channel != job.channel and r.begin <= now < r.stop for r in rec_jobs):
+        return "skip_rec"
+    if ctx.busy:
+        return "skip_busy"
+    return "switch"
+
+
+class WatchSchedule:
+    def __init__(self, path=None):
+        self.path, self.jobs = path, []
+        self.load()
+
+    def find(self, channel, start, end):
+        key = (channel, int(start), int(end))
+        return next((j for j in self.jobs if j.key == key), None)
+
+    def clash(self, channel, begin, end):
+        """Joburile de pe ALT canal a căror fereastră [begin, end) se suprapune cu cea dată."""
+        return [j for j in self.jobs if j.channel != channel and j.begin < end and begin < j.end]
+
+    def add(self, channel, title, start, end, now=None):
+        """Job nou, sau None dacă emisiunea s-a încheiat. Dacă există deja, îl întoarce pe cel existent."""
+        now = time.time() if now is None else now
+        if end <= now:
+            return None
+        job = self.find(channel, start, end)
+        if job is None:
+            job = WatchJob(channel, title, float(start), float(end))
+            self.jobs.append(job)
+            self.save()
+        return job
+
+    def remove(self, job):
+        if job in self.jobs:
+            self.jobs.remove(job)
+            self.save()
+
+    def save(self):
+        if not self.path:
+            return
+        try:
+            self.path.write_text(json.dumps([[j.channel, j.title, j.start, j.end] for j in self.jobs]), encoding="utf-8")
+        except OSError:
+            pass
+
+    def load(self, now=None):
+        now = time.time() if now is None else now
+        self.jobs = []
+        if not self.path:
+            return
+        try:
+            for ch, title, s, e in json.loads(self.path.read_text(encoding="utf-8")):
+                job = WatchJob(str(ch), str(title), float(s), float(e))
+                if job.end > now:
                     self.jobs.append(job)
         except (OSError, ValueError, TypeError):
             self.jobs = []
@@ -1915,6 +2068,159 @@ mp.register_script_message("teleops-labels", function(a, b, c)
     if a and a ~= "" then L.sub = a end
     if b and b ~= "" then L.audio = b end
     if c and c ~= "" then L.off = c end
+end)
+
+-- TV live: fără seek. Săgețile (și combinațiile cu Shift/Ctrl) și PgUp/PgDn nu mai fac nimic.
+-- (Alt+săgeți rămâne pan video, nu e seek.)
+for _, key in ipairs({"LEFT", "RIGHT", "UP", "DOWN",
+                      "Shift+LEFT", "Shift+RIGHT", "Shift+UP", "Shift+DOWN",
+                      "Ctrl+LEFT", "Ctrl+RIGHT", "Ctrl+UP", "Ctrl+DOWN",
+                      "Ctrl+Shift+LEFT", "Ctrl+Shift+RIGHT",
+                      "PGUP", "PGDWN", "Shift+PGUP", "Shift+PGDWN"}) do
+    mp.add_forced_key_binding(key, "teleops-noseek-" .. key, function() end)
+end
+
+-- Informații despre semnal (stânga jos): rezoluție / scanare / codec video și codec / canale / frecvență audio.
+-- Apar când canalul a pornit și se ascund după 15 s; Ctrl+I le arată din nou.
+local INFO_SECS = 15
+local IL = {video = "Video", audio = "Audio", wait = "se detectează...", noaud = "fără audio"}
+local VCODEC = {h264 = "AVC", hevc = "HEVC", mpeg2video = "MPEG-2", mpeg1video = "MPEG-1", mpeg4 = "MPEG-4",
+                vc1 = "VC-1", av1 = "AV1", vp9 = "VP9"}
+local ACODEC = {mp2 = "MP2", mp3 = "MP3", aac = "AAC", aac_latm = "AAC", ac3 = "AC-3", eac3 = "E-AC-3",
+                dts = "DTS", opus = "Opus", flac = "FLAC", vorbis = "Vorbis"}
+local CHANS = {[1] = "mono", [2] = "stereo", [3] = "2.1", [4] = "4.0", [5] = "5.0", [6] = "5.1", [7] = "6.1", [8] = "7.1"}
+local info_ov = mp.create_osd_overlay("ass-events")
+local info_on, info_timer, info_poll, info_started, seen_i = false, nil, nil, false, false
+
+local function selected_track(kind)
+    for _, t in ipairs(mp.get_property_native("track-list") or {}) do
+        if t.type == kind and t.selected then return t end
+    end
+    return nil
+end
+
+local function res_class(h)
+    if h >= 4000 then return "UHD 8K" end
+    if h >= 2000 then return "UHD 4K" end
+    if h >= 1400 then return "QHD" end
+    if h >= 1000 then return "Full HD" end
+    if h >= 700 then return "HD" end
+    return "SD"
+end
+
+-- „i” dacă semnalul are cadre întrețesute (flag din flux, reținut cât timp rulează sondarea), altfel „p”
+local function scan_char(h)
+    local il = mp.get_property_native("video-frame-info/interlaced")
+    if il ~= nil then
+        if il then seen_i = true end
+        return seen_i and "i" or "p"
+    end
+    -- mpv fără video-frame-info: presupunere după formatele obișnuite din broadcast
+    return (h >= 1000 and h <= 1100 or h <= 576) and "i" or "p"
+end
+
+local function codec_name(map, t)
+    local c = t.codec
+    if not c then return "?" end
+    return map[c] or c:upper()
+end
+
+local function info_lines()
+    local out = {}
+    local vt, at = selected_track("video"), selected_track("audio")
+    if vt then
+        local vp = mp.get_property_native("video-params")
+        local v = IL.wait
+        if vp and vp.h then
+            v = string.format("%s %d%s / %s", res_class(vp.h), vp.h, scan_char(vp.h), codec_name(VCODEC, vt))
+        end
+        out[#out + 1] = {IL.video, v}
+    end
+    if at then
+        local ap = mp.get_property_native("audio-params")
+        local parts = {codec_name(ACODEC, at)}
+        local ch = (ap and ap["channel-count"]) or at["demux-channel-count"]
+        local sr = (ap and ap.samplerate) or at["demux-samplerate"]
+        if ch then parts[#parts + 1] = CHANS[ch] or (ch .. "ch") end
+        if sr then parts[#parts + 1] = string.format("%g kHz", sr / 1000) end
+        out[#out + 1] = {IL.audio, table.concat(parts, " / ")}
+    else
+        out[#out + 1] = {IL.audio, IL.noaud}
+    end
+    return out
+end
+
+local function nchars(s)
+    return select(2, s:gsub("[^\128-\191]", ""))
+end
+
+local function info_render()
+    local w, h, k = geom()
+    if not info_on or not w then
+        info_ov:remove()
+        return
+    end
+    local lines = info_lines()
+    local fs, pad, m = 17 * k, 10 * k, 18 * k
+    local lh = fs * 1.5
+    local maxc = 0
+    for _, l in ipairs(lines) do
+        maxc = math.max(maxc, nchars(l[1] .. ": " .. l[2]))
+    end
+    local bw, bh = maxc * fs * 0.6 + 2 * pad, #lines * lh + 2 * pad
+    local x0, y0 = m, h - m - bh
+    local ln = {rect(x0, y0, x0 + bw, y0 + bh, "000000", "70")}
+    for i, l in ipairs(lines) do
+        ln[#ln + 1] = string.format("{\\an4\\pos(%d,%d)\\fs%d\\bord1.2\\shad0\\3c&H000000&\\1c&HB0B0B0&}%s: {\\1c&HFFFFFF&}%s",
+            I(x0 + pad), I(y0 + pad + (i - 0.5) * lh), I(fs), esc(l[1]), esc(l[2]))
+    end
+    info_ov.res_x, info_ov.res_y = w, h
+    info_ov.data = table.concat(ln, "\n")
+    info_ov:update()
+end
+
+local function info_hide()
+    info_on = false
+    if info_timer then info_timer:kill() info_timer = nil end
+    if info_poll then info_poll:kill() info_poll = nil end
+    info_ov:remove()
+end
+
+local function info_show()
+    info_on = true
+    if info_timer then info_timer:kill() end
+    if info_poll then info_poll:kill() end
+    info_timer = mp.add_timeout(INFO_SECS, info_hide)
+    info_poll = mp.add_periodic_timer(0.5, info_render)       -- prinde și flag-ul de întrețesere, care apare după primele cadre
+    info_render()
+end
+
+-- prima afișare: când sunt cunoscute parametrii video și audio (sau după 6 s, cu ce există)
+local function info_try(force)
+    if info_started then return end
+    local vt, at = selected_track("video"), selected_track("audio")
+    if not vt and not at then return end
+    local vp, ap = mp.get_property_native("video-params"), mp.get_property_native("audio-params")
+    if force or ((not vt or (vp and vp.h)) and (not at or ap)) then
+        info_started = true
+        info_show()
+    end
+end
+
+for _, p in ipairs({"video-params", "audio-params", "track-list"}) do
+    mp.observe_property(p, "native", function()
+        if not info_started then info_try(false) elseif info_on then info_render() end
+    end)
+end
+mp.observe_property("osd-dimensions", "native", function() if info_on then info_render() end end)
+mp.add_timeout(6, function() info_try(true) end)
+
+mp.register_script_message("teleops-info-show", info_show)
+mp.register_script_message("teleops-info-labels", function(v, a, wait, noaud)
+    if v and v ~= "" then IL.video = v end
+    if a and a ~= "" then IL.audio = a end
+    if wait and wait ~= "" then IL.wait = wait end
+    if noaud and noaud ~= "" then IL.noaud = noaud end
 end)
 
 -- „q”, „Q” și Ctrl+C nu mai închid mpv: fereastra video rămâne (programul decide când se oprește redarea)
@@ -2398,7 +2704,9 @@ class Streamer:
                     
                     ev, args = e.get("event"), e.get("args") or []
                     if ev == "client-message" and args:
-                        if args[0] == "show-info-osd": self.show_tv_osd()
+                        if args[0] == "show-info-osd":
+                            self.show_tv_osd()
+                            self.cmd("script-message", "teleops-info-show")     # și informațiile video/audio, încă 15 s
                         elif args[0] == "teleops-osc-hot": self.osc_hot = args[1:2] == ["1"]
                         elif args[0] in self.KEYS: self.on_msg(args[0])
                     elif ev == "property-change" and e.get("data") is not None:
@@ -2466,6 +2774,8 @@ class Streamer:
 
     def send_labels(self):
         self.cmd("script-message", "teleops-labels", self.t("osc_sub"), self.t("osc_audio"), self.t("osc_off"))
+        self.cmd("script-message", "teleops-info-labels", self.t("info_video"), self.t("info_audio"),
+                 self.t("info_wait"), self.t("info_noaud"))
 
     def set_rec_osd(self, text):
         """Indicator discret și permanent de înregistrare, ca osd-overlay separat (nu se suprapune cu EPG/show-text)."""
@@ -2817,7 +3127,8 @@ def hm(ts):
 
 class EpgWindow(tk.Toplevel):
     """`host` = fereastra principală; folosim doar: root, t(), lang, cur, stream, bg_grey, f_norm, f_bold, epg_events(),
-    is_scheduled(start, end), schedule_toggle(start, end, titlu)."""
+    is_scheduled(start, end), schedule_toggle(start, end, titlu) (+ last_dropped la „added_over”),
+    is_watch(start, end), watch_toggle(start, end, titlu) (+ last_conflict la „conflict”)."""
 
     def __init__(self, host):
         super().__init__(host.root)
@@ -2857,12 +3168,15 @@ class EpgWindow(tk.Toplevel):
         sb.pack(side="right", fill="y")
 
         btn_row = ttk.Frame(mf)
-        btn_row.pack(fill="x", pady=(0, 10))
+        btn_row.pack(fill="x", pady=(0, 4))
         rec_btn = ttk.Button(btn_row, text=host.t("epg_rec_btn"))
         rec_btn.pack(side="left")
         Tip(rec_btn, host.t("epg_rec_tip"), wrap=320)
-        status = ttk.Label(btn_row, text="", wraplength=360, justify="left")
-        status.pack(side="left", padx=12)
+        watch_btn = ttk.Button(btn_row, text=host.t("epg_watch_btn"))
+        watch_btn.pack(side="left", padx=(8, 0))
+        Tip(watch_btn, host.t("epg_watch_tip").format(lead=WATCH_LEAD // 60), wrap=320)
+        status = ttk.Label(mf, text="", wraplength=600, justify="left")      # mesajele, pe rând separat: nu se înghesuie lângă butoane
+        status.pack(fill="x", pady=(0, 8))
 
         d_frame = ttk.LabelFrame(mf, text=host.t("epg_desc"), padding=8)
         d_frame.pack(fill="both", expand=False)
@@ -2889,15 +3203,19 @@ class EpgWindow(tk.Toplevel):
             update_btn()
 
         def update_btn():
-            """Butonul programează sau anulează, după emisiunea selectată."""
+            """Butoanele programează sau anulează, după emisiunea selectată."""
             sel = tree.selection()
             if not sel or sel[0] not in ev_map:
                 rec_btn.configure(text=host.t("epg_rec_btn"))
+                watch_btn.configure(text=host.t("epg_watch_btn"))
                 rec_btn.state(["disabled"])
+                watch_btn.state(["disabled"])
                 return
             s, e = ev_map[sel[0]][:2]
             rec_btn.configure(text=host.t("epg_rec_cancel" if host.is_scheduled(s, e) else "epg_rec_btn"))
+            watch_btn.configure(text=host.t("epg_watch_cancel" if host.is_watch(s, e) else "epg_watch_btn"))
             rec_btn.state(["!disabled"])
+            watch_btn.state(["!disabled"])
 
         def toggle_rec():
             sel = tree.selection()
@@ -2905,13 +3223,32 @@ class EpgWindow(tk.Toplevel):
                 return
             s, e, name, _ = ev_map[sel[0]]
             result = host.schedule_toggle(s, e, name)
+            added = host.t("epg_rec_added").format(start=hm(s), end=hm(e), margin=PRE // 60)
+            dropped = ", ".join(f"„{w.title}” ({w.channel.strip()})" for w in host.last_dropped)
             status.configure(text={
-                "added": host.t("epg_rec_added").format(start=hm(s), end=hm(e), margin=PRE // 60),
+                "added": added,
+                "added_over": added + " " + host.t("rec_watch_dropped").format(items=dropped),
                 "removed": host.t("epg_rec_removed"),
                 "past": host.t("epg_rec_past")}[result])
             render()
 
+        def toggle_watch():
+            sel = tree.selection()
+            if not sel or sel[0] not in ev_map:
+                return
+            s, e, name, _ = ev_map[sel[0]]
+            result = host.watch_toggle(s, e, name)
+            other = host.last_conflict
+            status.configure(text={
+                "added": lambda: host.t("epg_watch_added").format(start=hm(s), lead=WATCH_LEAD // 60),
+                "removed": lambda: host.t("epg_watch_removed"),
+                "past": lambda: host.t("epg_rec_past"),
+                "running": lambda: host.t("epg_watch_running"),
+                "conflict": lambda: host.t("epg_watch_clash").format(title=other.title, channel=other.channel.strip())}[result]())
+            render()
+
         rec_btn.configure(command=toggle_rec)
+        watch_btn.configure(command=toggle_watch)
         tree.bind("<<TreeviewSelect>>", on_select)
 
         days_dict = {
@@ -2937,7 +3274,7 @@ class EpgWindow(tk.Toplevel):
                 day_name = days_dict.get(host.lang, days_dict["Română"])[dt.weekday()]
                 date_str = f"{day_name} {dt.day:02d}.{dt.month:02d}"
                 time_str = f"{hm(s)}–{hm(e)}"
-                mark = "⏺ " if host.is_scheduled(s, e) else ""
+                mark = ("⏺ " if host.is_scheduled(s, e) else "") + ("📺 " if host.is_watch(s, e) else "")
                 item_id = tree.insert("", "end", values=(date_str, time_str, mark + name))
                 ev_map[item_id] = (s, e, name, desc)
 
@@ -3198,6 +3535,7 @@ class Main:
         self.root, self.settings, self.mpv_cmd = root, load_settings(), mpv_cmd
         self.mpv_opts, self.mpv_dialog = clean_mpv_opts(self.settings.get("mpv_opts", {})), None
         self.schedule, self.rec_job = RecordingSchedule(SCHEDULE), None      # înregistrări programate din EPG
+        self.watch, self.last_conflict, self.last_dropped = WatchSchedule(WATCH), None, []   # „Vreau să vizionez” + ultimul conflict / vizionări anulate
         self.lang = self.settings.get("lang") if self.settings.get("lang") in LANGS else LANGS[0]
         self.last_channel = self.settings.get("last_channel", "")
         self.favorites = set(self.settings.get("favorites", []))
@@ -4083,7 +4421,10 @@ class Main:
         return bool(self.cur and self.schedule.find(self.cur, start, end))
 
     def schedule_toggle(self, start, end, title):
-        """Programează sau anulează înregistrarea unei emisiuni de pe canalul curent: "added" | "removed" | "past"."""
+        """Programează sau anulează înregistrarea unei emisiuni de pe canalul curent:
+        "added" | "removed" | "past" | "added_over" (adăugată; în `last_dropped` sunt vizionările „Vreau să vizionez” de pe alt canal,
+        suprapuse, anulate: înregistrarea are prioritate)."""
+        self.last_conflict, self.last_dropped = None, []
         if not self.cur:
             return "past"
         job = self.schedule.find(self.cur, start, end)
@@ -4092,7 +4433,64 @@ class Main:
                 self.set_recording(False)
             self.schedule.remove(job)
             return "removed"
-        return "added" if self.schedule.add(self.cur, title, start, end) else "past"
+        if end <= time.time():
+            return "past"
+        if not self.schedule.add(self.cur, title, start, end):
+            return "past"
+        self.last_dropped = self.watch.clash(self.cur, start - PRE, end + POST)
+        for w in self.last_dropped:
+            self.watch.remove(w)
+        return "added_over" if self.last_dropped else "added"
+
+    # ---- „Vreau să vizionez” (din fereastra EPG): comutare automată pe canalul emisiunii
+    def is_watch(self, start, end):
+        return bool(self.cur and self.watch.find(self.cur, start, end))
+
+    def watch_toggle(self, start, end, title):
+        """Programează sau anulează comutarea automată pe canalul curent la ora emisiunii:
+        "added" | "removed" | "past" | "running" (rulează deja, pe canalul curent) | "conflict" (în `last_conflict`: înregistrare pe alt canal)."""
+        self.last_conflict = None
+        if not self.cur:
+            return "past"
+        job = self.watch.find(self.cur, start, end)
+        if job:
+            self.watch.remove(job)
+            return "removed"
+        now = time.time()
+        if end <= now:
+            return "past"
+        if start - WATCH_LEAD <= now:
+            return "running"
+        clash = self.schedule.clash(self.cur, start - WATCH_LEAD, end)
+        if clash:
+            self.last_conflict = clash[0]
+            return "conflict"
+        return "added" if self.watch.add(self.cur, title, start, end) else "past"
+
+    def _notify(self, text):
+        """Mesaj discret peste imagine dacă mpv rulează; altfel fereastră de informare."""
+        if self.stream and self.stream.conn:
+            self.stream.cmd("show-text", text, 8000)
+        else:
+            messagebox.showinfo(TITLE, text, parent=self.root)
+
+    def _watch_tick(self, now):
+        known = {c for c, _ in self.tv_channels + self.radio_channels}
+        ctx = WatchCtx(self.rec_on, self.cur, self.stream is not None, self.scan_active)
+        for job in list(self.watch.jobs):
+            action = watch_plan(job, ctx, now, self.schedule.jobs)
+            if action == "wait":
+                continue
+            if action == "switch" and job.channel not in known:
+                self.watch.remove(job)
+                self._notify(self.t("watch_fail").format(title=job.title, channel=job.channel.strip()))
+                continue
+            self.watch.remove(job)                         # restul acțiunilor sunt „o singură dată”
+            if action == "switch":
+                self.tune(job.channel)
+                ctx = WatchCtx(self.rec_on, self.cur, self.stream is not None, self.scan_active)
+            elif action in ("skip_rec", "skip_busy"):
+                self._notify(self.t("watch_" + action).format(title=job.title, channel=job.channel.strip()))
 
     def _osd(self, text):
         if self.stream:
@@ -4100,9 +4498,13 @@ class Main:
 
     def _schedule_tick(self):
         """Apelat la fiecare tick: oprește joburile terminate și pornește/pregătește pe cele a căror oră a venit."""
-        if not self.schedule.jobs:
-            return
         now = time.time()
+        if self.schedule.jobs:
+            self._record_tick(now)
+        if self.watch.jobs:
+            self._watch_tick(now)           # după înregistrări: ele au prioritate
+
+    def _record_tick(self, now):
         for job in self.schedule.expired(now):             # intervalul a trecut fără să fi pornit (ex. aplicația era închisă)
             self.schedule.remove(job)
         for job in self.schedule.finished(now):
