@@ -56,7 +56,7 @@ chmod +x teleops.py
 ## ⌨️ Keyboard shortcuts
 | Action | Shortcut |
 |---|---|
-| EPG info | `Ctrl + I` *(was `I`)* |
+| EPG info | `I` |
 | Start/stop recording | `Ctrl + R` *(new)* |
 | Fullscreen | `F` / `F11` *(new)* |
 | Hide/show interface | `.` / double-click on video *(new)* |
