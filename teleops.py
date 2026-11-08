@@ -40,7 +40,7 @@ HARTA SECȚIUNILOR
              · schedule: Programarea înregistrărilor din EPG: lista de joburi + deciziile (fără UI, fără Tk, testabil).
              · watch: „Vreau să vizionez”: comutarea automată pe canalul unei emisiuni, fără conflict cu înregistrările.
     player   mpv + dvbv5-zap: redare, script OSC, opțiuni și validare mpv
-             · osc_script: Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute, info video/audio, blocarea seek-ului). Se scrie în CONF_DIR la fiecare pornire.
+             · osc_script: Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute, OSD EPG cu bară de progres, info video/audio, blocarea seek-ului). Se scrie în CONF_DIR la fiecare pornire.
              · mpv_options: Opțiunile mpv oferite în dialogul „Configurează MPV” și transformarea lor în linii de mpv.conf.
              · mpv_check: Validarea unei configurații mpv înainte s-o salvăm: pornește scurt mpv pe o sursă de test.
              · streamer: Redarea unui canal: dvbv5-zap -> (filtru TS) -> mpv încorporat în fereastra Tk, cu control prin IPC.
@@ -273,8 +273,8 @@ T = {  # cheie: (ro, en, it)
     "hk_title": ("⌨️ Comenzi rapide", "⌨️ Hotkeys", "⌨️ Scorciatoie"),
     "hk_search": ("Arată/ascunde căutarea", "Show/hide search", "Mostra/nascondi ricerca"),
     "hk_search_k": ("Click Dreapta pe listă", "Right Click on list", "Clic destro sulla lista"),
-    "hk_epg": ("Informații EPG și semnal", "EPG and signal info", "Info EPG e segnale"),
-    "hk_epg_k": ("CTRL + I", "CTRL + I", "CTRL + I"),
+    "hk_epg": ("Informații canal", "Channel info", "Info canale"),
+    "hk_epg_k": ("I", "I", "I"),
     "hk_fav": ("Adaugă / Elimină din Favorite", "Add / Remove Favorites", "Aggiungi / Rimuovi Preferiti"),
     "hk_fav_k": ("CTRL + Click Stânga", "CTRL + Left Click", "CTRL + Clic sinistro"),
     "hk_play": ("Redă canalul", "Play channel", "Riproduci il canale"),
@@ -286,6 +286,10 @@ T = {  # cheie: (ro, en, it)
     "hk_rec": ("Pornește/oprește înregistrarea", "Start/stop recording", "Avvia/ferma la registrazione"),
     "hk_rec_k": ("CTRL + R", "CTRL + R", "CTRL + R"),
     "hk_osc": ("Subtitrare / audio / mute", "Subtitles / audio / mute", "Sottotitoli / audio / muto"),
+    "hk_vol": ("Volum", "Volume", "Volume"),
+    "hk_vol_k": ("Rotiță mouse pe video", "Mouse wheel on video", "Rotellina del mouse sul video"),
+    "hk_mute": ("Mute / Unmute", "Mute / Unmute", "Mute / Unmute"),
+    "hk_mute_k": ("M", "M", "M"),
     "hk_osc_k": ("Click dreapta pe video", "Right click on video", "Clic destro sul video"),
     "hk_quit": ("Închide programul", "Quit program", "Chiudi il programma"),
     "hk_quit_k": ("CTRL + SHIFT + X", "CTRL + SHIFT + X", "CTRL + SHIFT + X"),
@@ -2051,6 +2055,8 @@ end
 
 mp.add_forced_key_binding("MBTN_LEFT", "teleops-click", on_click)
 mp.add_forced_key_binding("MBTN_LEFT_DBL", "teleops-dbl", on_dbl)
+mp.add_forced_key_binding("m", "teleops-mute-m", function() mp.commandv("cycle", "mute") end)
+mp.add_forced_key_binding("M", "teleops-mute-M", function() mp.commandv("cycle", "mute") end)
 mp.add_forced_key_binding("MBTN_RIGHT", "teleops-rclick", function()     -- click dreapta: bara apare/dispare (și nu mai pune pauză)
     if shown then hide() else show() end
 end)
@@ -2081,7 +2087,7 @@ for _, key in ipairs({"LEFT", "RIGHT", "UP", "DOWN",
 end
 
 -- Informații despre semnal (stânga jos): rezoluție / scanare / codec video și codec / canale / frecvență audio.
--- Apar când canalul a pornit și se ascund după 15 s; Ctrl+I le arată din nou.
+-- Apar când canalul a pornit și se ascund după 15 s; tasta I le arată din nou.
 local INFO_SECS = 15
 local IL = {video = "Video", audio = "Audio", wait = "se detectează...", noaud = "fără audio"}
 local VCODEC = {h264 = "AVC", hevc = "HEVC", mpeg2video = "MPEG-2", mpeg1video = "MPEG-1", mpeg4 = "MPEG-4",
@@ -2221,6 +2227,107 @@ mp.register_script_message("teleops-info-labels", function(v, a, wait, noaud)
     if a and a ~= "" then IL.audio = a end
     if wait and wait ~= "" then IL.wait = wait end
     if noaud and noaud ~= "" then IL.noaud = noaud end
+end)
+
+-- OSD EPG (stânga sus): canalul, emisiunea curentă cu bară de progres și emisiunea următoare.
+-- Python trimite doar datele (teleops-epg); desenul, bara și durata de 15 s sunt aici.
+local EL = {now = "ACUM", next = "URMĂTOAREA", rem = "Rămas", loading = "Se încarcă EPG...", na = "Indisponibil"}
+local EPG_SECS = 15
+local epg = {name = "", ts = true, title = nil, start = 0, stop = 0, ntitle = nil}
+local epg_ov = mp.create_osd_overlay("ass-events")
+local epg_on, epg_timer = false, nil
+
+-- taie la n caractere UTF-8 (cu „…” la final)
+local function ucut(s, n)
+    local chars = {}
+    for ch in s:gmatch("[\1-\127\194-\244][\128-\191]*") do chars[#chars + 1] = ch end
+    if #chars <= n then return s end
+    return table.concat(chars, "", 1, math.max(1, n - 1)) .. "…"
+end
+
+local function epg_render()
+    local w, h, k = geom()
+    if not epg_on or not w then
+        epg_ov:remove()
+        return
+    end
+    local fs, pad, m = 20 * k, 12 * k, 18 * k
+    local lh = fs * 1.5
+    local cw_char = fs * 0.58
+    local now = os.time()
+    local l_now = "▶ " .. EL.now .. ": " .. esc(epg.title or EL.loading)
+    local l_next = "⏭ " .. EL.next .. ": " .. esc(epg.ntitle or (epg.ts and EL.loading or EL.na))
+    local name = esc(epg.name)
+    local rem_txt, prog = "", 0
+    if epg.title and epg.stop > epg.start then
+        prog = math.max(0, math.min(1, (now - epg.start) / (epg.stop - epg.start)))
+        rem_txt = string.format("%s: %d min", EL.rem, math.max(0, math.floor((epg.stop - now) / 60)))
+    end
+    local cw_max = math.min(w * 0.5, w - 2 * m - 2 * pad)
+    local want = math.max(nchars(l_now), nchars(l_next), nchars(name)) * cw_char
+    local cw = math.max(18 * fs, math.min(cw_max, want))
+    local maxc = math.floor(cw / cw_char)
+    local x0, y0 = m, m
+    local x, y = x0 + pad, y0 + pad
+    local sep = math.max(1, 1.5 * k)
+    local bh = pad * 2 + lh * 4 + 8 * k
+    local ln = {rect(x0, y0, x0 + cw + 2 * pad, y0 + bh, "000000", "70")}
+    local function row(cy, size, body)
+        ln[#ln + 1] = string.format("{\\an4\\pos(%d,%d)\\fs%d\\bord1.2\\shad0\\3c&H000000&}%s", I(x), I(cy), I(size), body)
+    end
+    row(y + lh / 2, fs, "{\\b1\\1c&HFFFFFF&}" .. esc(ucut(name, maxc)))
+    y = y + lh
+    ln[#ln + 1] = rect(x, y + 2 * k, x + cw, y + 2 * k + sep, "808080", "40")
+    y = y + 8 * k
+    local lab, body = l_now:match("^(.-: )(.*)$")
+    row(y + lh / 2, fs, string.format("{\\1c&H%s&}%s{\\1c&HFFFFFF&}%s", ACC, lab, esc(ucut(body, maxc - nchars(lab)))))
+    y = y + lh
+    local remw = rem_txt ~= "" and (nchars(rem_txt) * cw_char * 0.85 + 10 * k) or 0
+    local barw, barh = cw - remw, 10 * k
+    local by = y + (lh - barh) / 2
+    ln[#ln + 1] = rect(x, by, x + barw, by + barh, "808080", "60")
+    if prog > 0 then ln[#ln + 1] = rect(x, by, x + barw * prog, by + barh, ACC, "00") end
+    if rem_txt ~= "" then
+        ln[#ln + 1] = string.format("{\\an4\\pos(%d,%d)\\fs%d\\bord1.2\\shad0\\3c&H000000&\\1c&HD0D0D0&}%s",
+            I(x + barw + 10 * k), I(y + lh / 2), I(fs * 0.85), esc(rem_txt))
+    end
+    y = y + lh
+    lab, body = l_next:match("^(.-: )(.*)$")
+    row(y + lh / 2, fs, string.format("{\\1c&H%s&}%s{\\1c&HFFFFFF&}%s", ACC, lab, esc(ucut(body, maxc - nchars(lab)))))
+    epg_ov.res_x, epg_ov.res_y = w, h
+    epg_ov.data = table.concat(ln, "\n")
+    epg_ov:update()
+end
+
+local function epg_hide()
+    epg_on = false
+    if epg_timer then epg_timer:kill() epg_timer = nil end
+    epg_ov:remove()
+end
+
+local function epg_show()
+    epg_on = true
+    if epg_timer then epg_timer:kill() end
+    epg_timer = mp.add_timeout(EPG_SECS, epg_hide)
+    epg_render()
+end
+
+mp.observe_property("osd-dimensions", "native", function() if epg_on then epg_render() end end)
+mp.register_script_message("teleops-epg-show", epg_show)
+mp.register_script_message("teleops-epg-hide", epg_hide)
+mp.register_script_message("teleops-epg", function(name, ts, title, st, en, ntitle)
+    epg.name, epg.ts = name or "", ts ~= "0"
+    epg.title = (title and title ~= "") and title or nil
+    epg.start, epg.stop = tonumber(st) or 0, tonumber(en) or 0
+    epg.ntitle = (ntitle and ntitle ~= "") and ntitle or nil
+    if epg_on then epg_render() end
+end)
+mp.register_script_message("teleops-epg-labels", function(now, nxt, rem, loading, na)
+    if now and now ~= "" then EL.now = now end
+    if nxt and nxt ~= "" then EL.next = nxt end
+    if rem and rem ~= "" then EL.rem = rem end
+    if loading and loading ~= "" then EL.loading = loading end
+    if na and na ~= "" then EL.na = na end
 end)
 
 -- „q”, „Q” și Ctrl+C nu mai închid mpv: fereastra video rămâne (programul decide când se oprește redarea)
@@ -2588,8 +2695,9 @@ GPU_CONTEXT = os.environ.get("TELEOPS_GPU_CONTEXT", "x11egl")   # mpv încorpora
 class Streamer:
     OBSERVED = ("volume-max", "volume", "mute", "vo-configured", "audio-params")
     # mesaj -> tastele mpv care îl trimit (cât timp mpv are focusul, Tk nu primește tastele; „i” simplu rămâne nativ mpv)
-    KEYS = {"show-info-osd": ("Ctrl+i",), "toggle-ui": (".", "MBTN_LEFT_DBL"), "toggle-fs": ("f", "F", "F11"),
-            "exit-fs": ("ESC",), "toggle-rec": ("Ctrl+r", "Ctrl+R"), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X")}
+    KEYS = {"show-info-osd": ("i", "I"), "toggle-ui": (".", "MBTN_LEFT_DBL"), "toggle-fs": ("f", "F", "F11"),
+            "exit-fs": ("ESC",), "toggle-rec": ("Ctrl+r", "Ctrl+R"),
+            "vol-up": ("WHEEL_UP",), "vol-down": ("WHEEL_DOWN",), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X")}
 
     def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None):
         self.props, self.on_prop, self.conn = dict(props), on_prop, None
@@ -2625,6 +2733,7 @@ class Streamer:
             self.zap = subprocess.Popen(zap_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=get_clean_env())
 
         mpv = [*mpv_cmd, "--no-terminal", f"--include={MPV_CONF}", f"--input-ipc-server={self.sock}",
+               "--no-input-default-bindings", "--input-conf=/dev/null",      # fără taste implicite mpv (consolă, o, i...): doar cele ale programului
                "--sid=auto", "--sub-visibility=yes", f"--volume={props['volume']}",
                f"--mute={'yes' if props['mute'] else 'no'}", f"--title=TV - {channel.strip()}"]
         env = get_clean_env()
@@ -2705,8 +2814,7 @@ class Streamer:
                     ev, args = e.get("event"), e.get("args") or []
                     if ev == "client-message" and args:
                         if args[0] == "show-info-osd":
-                            self.show_tv_osd()
-                            self.cmd("script-message", "teleops-info-show")     # și informațiile video/audio, încă 15 s
+                            self.show_channel_info()
                         elif args[0] == "teleops-osc-hot": self.osc_hot = args[1:2] == ["1"]
                         elif args[0] in self.KEYS: self.on_msg(args[0])
                     elif ev == "property-change" and e.get("data") is not None:
@@ -2733,35 +2841,22 @@ class Streamer:
         return bool(cur and nxt and nxt[0] - cur[1] <= 120)
 
     def show_tv_osd(self):
-        now = time.time()
-        now_lbl = self.t("now").upper()
-        next_lbl = self.t("next").upper()
-        rem_lbl = self.t("osd_rem")
-        now_title = self.t("osd_loading")
-        next_title = self.t("osd_loading") if self.ts else self.t("osd_na")
-        prog_bar = "[░░░░░░░░░░░░░░░░░░░░] 0%"
+        """Trimite datele EPG către scriptul Lua, care desenează panoul (15 s, cu bară de progres)."""
+        cur, nxt = self._now_next(time.time())
+        self.cmd("script-message", "teleops-epg", self.channel_name.strip(), "1" if self.ts else "0",
+                 cur[2] if cur else "", str(int(cur[0])) if cur else "0", str(int(cur[1])) if cur else "0",
+                 nxt[2] if nxt else "")
+        self.cmd("script-message", "teleops-epg-show")
 
-        cur, nxt = self._now_next(now)
-        if cur:
-            start, end, title, _ = cur
-            now_title = title
-            total = end - start
-            if total > 0:
-                rem = max(0, int((end - now) / 60))
-                progress = max(0.0, min(1.0, (now - start) / total))
-                filled = int(progress * 20)
-                prog_bar = "[" + "█" * filled + "░" * (20 - filled) + f"] {rem_lbl}: {rem} min"
-        if nxt:
-            next_title = nxt[2]
+    def show_channel_info(self):
+        """„Informații canal”: panoul EPG și panoul cu semnalul video/audio, câte 15 s."""
+        self.show_tv_osd()
+        self.cmd("script-message", "teleops-info-show")
 
-        osd_text = (
-            f"                  {self.channel_name.strip()}                  \n"
-            f"────────────────────────────────────────\n"
-            f"▶ {now_lbl}: {now_title}\n"
-            f"{prog_bar}\n"
-            f"⏭ {next_lbl}: {next_title}"
-        )
-        self.cmd("show-text", osd_text, 15000)
+    def toast(self, text, ms):
+        """Mesaj scurt de text (volum, mute, notificări). Ascunde panoul EPG, ca să nu se suprapună."""
+        self.cmd("script-message", "teleops-epg-hide")
+        self.cmd("show-text", text, ms)
 
     def cmd(self, *args):
         if self.conn:
@@ -2776,6 +2871,8 @@ class Streamer:
         self.cmd("script-message", "teleops-labels", self.t("osc_sub"), self.t("osc_audio"), self.t("osc_off"))
         self.cmd("script-message", "teleops-info-labels", self.t("info_video"), self.t("info_audio"),
                  self.t("info_wait"), self.t("info_noaud"))
+        self.cmd("script-message", "teleops-epg-labels", self.t("now").upper(), self.t("next").upper(),
+                 self.t("osd_rem"), self.t("osd_loading"), self.t("osd_na"))
 
     def set_rec_osd(self, text):
         """Indicator discret și permanent de înregistrare, ca osd-overlay separat (nu se suprapune cu EPG/show-text)."""
@@ -2816,6 +2913,7 @@ class Streamer:
 # ──────────────────────────────────────────────────────────────────────────────
 
 VOL_MAX = 130           # volume-max implicit în mpv
+VOL_WHEEL_STEP = 5      # procente de volum la fiecare „clic” al rotiței de mouse de pe video
 TXT_DARK = "#000000"    # culoare text implicită
 LIST_MIN_H = 150        # înălțimea minimă (px) a listei de canale la strângerea ferestrei
 CFG_W, CFG_GAP = 36, 5     # lățimea butonului ⚙ și spațiul dintre el și butonul EPG
@@ -2824,7 +2922,7 @@ VIDEO_MIN_W = 480       # lățimea minimă a zonei video
 
 HOTKEYS = (("hk_play", "hk_play_k"), ("hk_fav", "hk_fav_k"), ("hk_search", "hk_search_k"),      # lista de canale
            ("hk_epg", "hk_epg_k"), ("hk_rec", "hk_rec_k"),                                      # canalul curent
-           ("hk_osc", "hk_osc_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),                  # video
+           ("hk_osc", "hk_osc_k"), ("hk_vol", "hk_vol_k"), ("hk_mute", "hk_mute_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),   # video
            ("hk_quit", "hk_quit_k"))                                                            # program
 
 
@@ -3574,7 +3672,7 @@ class Main:
         self._min_h = 0
         root.resizable(True, True)
 
-        for fmt, letters, fn in (("<Control-Key-{}>", "iI", self.on_key_i),         # EPG („i” simplu rămâne liber pentru mpv)
+        for fmt, letters, fn in (("<Key-{}>", "iI", self.on_key_i),                 # informații canal (EPG + semnal)
                                  ("<Control-Key-{}>", "rR", self.toggle_rec),       # pornește/oprește înregistrarea
                                  ("<Control-Shift-Key-{}>", "xX", lambda e: self.on_close()),
                                  ("<Key-{}>", "fF", self.on_key_f)):                # ecran complet
@@ -3845,7 +3943,7 @@ class Main:
         self.root.attributes("-fullscreen", self.fullscreen)
 
     def _typing(self):
-        """True cât se scrie într-un câmp de text (scurtăturile `.` și `f` trebuie ignorate)."""
+        """True cât se scrie într-un câmp de text (scurtăturile `.`, `f` și `i` trebuie ignorate)."""
         try:
             return isinstance(self.root.focus_get(), (tk.Entry, ttk.Entry, ttk.Combobox))
         except KeyError:
@@ -3884,6 +3982,8 @@ class Main:
             self.on_close()
         elif msg == "toggle-rec":
             self.toggle_rec()
+        elif msg in ("vol-up", "vol-down"):
+            self.wheel_volume(VOL_WHEEL_STEP if msg == "vol-up" else -VOL_WHEEL_STEP)
 
     # ---- mutarea ferestrei prin tragere (fără titlebar)
 
@@ -3953,17 +4053,27 @@ class Main:
             self.vol_lbl.configure(text=f"{v}%")
             if self.stream:
                 self.stream.set_prop("volume", v)
-                self.stream.cmd("show-text", f"{self.t('osd_volume')}: {v}%", 3000)
+                self.stream.toast(f"{self.t('osd_volume')}: {v}%", 3000)
+
+    def wheel_volume(self, delta):
+        """Rotița de mouse de pe video: același drum ca glisorul (eticheta, mpv, mesajul „Volum”)."""
+        try:
+            top = float(self.vol_slider.cget("to"))
+        except (tk.TclError, ValueError):
+            top = VOL_MAX
+        v = int(max(0, min(top, self.volume + delta)))
+        self.on_volume(v)
+        self.vol_slider.set(v)
 
     def toggle_mute(self, _=None):
         self.show_mute(not self.muted)
         if self.stream:
             self.stream.set_prop("mute", self.muted)
-            self.stream.cmd("show-text", self.t("osd_mute_on" if self.muted else "osd_mute_off"), 3000)
+            self.stream.toast(self.t("osd_mute_on" if self.muted else "osd_mute_off"), 3000)
 
     def on_key_i(self, event=None):
         if self.stream and not self._typing():      # dezactivată cât timp se scrie în căutare
-            self.stream.show_tv_osd()
+            self.stream.show_channel_info()
 
     def is_radio(self, name):
         return bool(name) and any(c == name for c, _ in self.radio_channels)
@@ -4470,7 +4580,7 @@ class Main:
     def _notify(self, text):
         """Mesaj discret peste imagine dacă mpv rulează; altfel fereastră de informare."""
         if self.stream and self.stream.conn:
-            self.stream.cmd("show-text", text, 8000)
+            self.stream.toast(text, 8000)
         else:
             messagebox.showinfo(TITLE, text, parent=self.root)
 
@@ -4494,7 +4604,7 @@ class Main:
 
     def _osd(self, text):
         if self.stream:
-            self.stream.cmd("show-text", text, 5000)
+            self.stream.toast(text, 5000)
 
     def _schedule_tick(self):
         """Apelat la fiecare tick: oprește joburile terminate și pornește/pregătește pe cele a căror oră a venit."""
