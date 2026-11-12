@@ -65,6 +65,7 @@ CUM ADAUGI...
 
 import configparser
 import ctypes
+import base64
 import ctypes.util
 import fcntl
 import functools
@@ -82,6 +83,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import zlib
 import tkinter.font as tkfont
 from collections import deque
 from dataclasses import dataclass
@@ -101,6 +103,7 @@ from tkinter import filedialog, messagebox, ttk
 # ──────────────────────────────────────────────────────────────────────────────
 
 TITLE = "Teleops DVB"
+VERSION = "3.7.2"
 WM_NAME, WM_CLASS = "teleops", "Teleops"   # WM_CLASS al ferestrei: GNOME/KDE îl potrivesc cu fișierul .desktop (iconiță în bara de activități)
 CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
@@ -244,7 +247,7 @@ def write_mpv_conf(text):
 LANGS = ("Română", "English", "Italiano")
 T = {  # cheie: (ro, en, it)
     "tuner_label": ("Tuner / Frontend activ:", "Active Tuner / Frontend:", "Sintonizzatore / Frontend attivo:"),
-    "lang_label": ("Limbă / Language:", "Language:", "Lingua:"),
+    "lang_label": ("Limbă:", "Language:", "Lingua:"),
     "scan_c": ("📡 Scanează DVB-C (Cablu)", "📡 Scan DVB-C (Cable)", "📡 Scansiona DVB-C (Cavo)"),
     "scan_t": ("🗼 Scanează DVB-T (Terestru)", "🗼 Scan DVB-T (Terrestrial)", "🗼 Scansiona DVB-T (Terrestre)"),
     "cfg_mpv": ("⚙️ Configurează MPV", "⚙️ Configure MPV", "⚙️ Configura MPV"),
@@ -275,6 +278,8 @@ T = {  # cheie: (ro, en, it)
     "hk_search_k": ("Click Dreapta pe listă", "Right Click on list", "Clic destro sulla lista"),
     "hk_epg": ("Informații canal", "Channel info", "Info canale"),
     "hk_epg_k": ("I", "I", "I"),
+    "hk_epgwin": ("Program TV (EPG)", "TV Guide (EPG)", "Guida TV (EPG)"),
+    "hk_epgwin_k": ("CTRL + I", "CTRL + I", "CTRL + I"),
     "hk_fav": ("Adaugă / Elimină din Favorite", "Add / Remove Favorites", "Aggiungi / Rimuovi Preferiti"),
     "hk_fav_k": ("CTRL + Click Stânga", "CTRL + Left Click", "CTRL + Clic sinistro"),
     "hk_play": ("Redă canalul", "Play channel", "Riproduci il canale"),
@@ -293,6 +298,23 @@ T = {  # cheie: (ro, en, it)
     "hk_osc_k": ("Click dreapta pe video", "Right click on video", "Clic destro sul video"),
     "hk_quit": ("Închide programul", "Quit program", "Chiudi il programma"),
     "hk_quit_k": ("CTRL + SHIFT + X", "CTRL + SHIFT + X", "CTRL + SHIFT + X"),
+    # „Despre” (fereastră separată, nerdimensionabilă, deschisă din butonul din setări)
+    "about_btn": ("Despre Teleops DVB", "About Teleops DVB", "Informazioni su Teleops DVB"),
+    "about_title": ("Teleops DVB, versiunea {v}", "Teleops DVB, version {v}", "Teleops DVB, versione {v}"),
+    "about_desc": (
+        "Un player TV/radio DVB (TV Tuner Player) construit în Python Tk, cu EPG, subtitrări DVB și înregistrări programate. "
+        "Folosește dvbv5-scan, dvbv5-zap și dvb-fe-tool din pachetul dvb-tools pentru scanarea canalelor și recepție, "
+        "iar mpv pentru redarea video și audio.",
+        "A DVB TV/radio player (TV Tuner Player) built with Python Tk, with EPG, DVB subtitles and scheduled recordings. "
+        "It uses dvbv5-scan, dvbv5-zap and dvb-fe-tool from the dvb-tools package for channel scanning and reception, "
+        "and mpv for video and audio playback.",
+        "Un player TV/radio DVB (TV Tuner Player) realizzato con Python Tk, con EPG, sottotitoli DVB e registrazioni programmate. "
+        "Usa dvbv5-scan, dvbv5-zap e dvb-fe-tool del pacchetto dvb-tools per la scansione dei canali e la ricezione, "
+        "e mpv per la riproduzione video e audio."),
+    "about_dev": (
+        "Dezvoltat de Valentin Iacob, turock_valentin@gmail.com",
+        "Developed by Valentin Iacob, turock_valentin@gmail.com",
+        "Sviluppato da Valentin Iacob, turock_valentin@gmail.com"),
     "loading": ("Se încarcă...", "Loading...", "Caricamento..."),
     "osc_sub": ("Subtitrare", "Subtitles", "Sottotitoli"),
     "osc_audio": ("Coloană sonoră", "Audio track", "Traccia audio"),
@@ -2696,7 +2718,7 @@ class Streamer:
     OBSERVED = ("volume-max", "volume", "mute", "vo-configured", "audio-params")
     # mesaj -> tastele mpv care îl trimit (cât timp mpv are focusul, Tk nu primește tastele; „i” simplu rămâne nativ mpv)
     KEYS = {"show-info-osd": ("i", "I"), "toggle-ui": (".", "MBTN_LEFT_DBL"), "toggle-fs": ("f", "F", "F11"),
-            "exit-fs": ("ESC",), "toggle-rec": ("Ctrl+r", "Ctrl+R"),
+            "exit-fs": ("ESC",), "toggle-rec": ("Ctrl+r", "Ctrl+R"), "show-epg": ("Ctrl+i", "Ctrl+I"),
             "vol-up": ("WHEEL_UP",), "vol-down": ("WHEEL_DOWN",), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X")}
 
     def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None):
@@ -2921,7 +2943,7 @@ PANEL_W = 320           # lățimea fixă a panoului cu comenzi
 VIDEO_MIN_W = 480       # lățimea minimă a zonei video
 
 HOTKEYS = (("hk_play", "hk_play_k"), ("hk_fav", "hk_fav_k"), ("hk_search", "hk_search_k"),      # lista de canale
-           ("hk_epg", "hk_epg_k"), ("hk_rec", "hk_rec_k"),                                      # canalul curent
+           ("hk_epg", "hk_epg_k"), ("hk_epgwin", "hk_epgwin_k"), ("hk_rec", "hk_rec_k"),                                      # canalul curent
            ("hk_osc", "hk_osc_k"), ("hk_vol", "hk_vol_k"), ("hk_mute", "hk_mute_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),   # video
            ("hk_quit", "hk_quit_k"))                                                            # program
 
@@ -3624,6 +3646,75 @@ class MpvDialog(tk.Toplevel):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SECȚIUNE ui/about_window
+#   Fereastra „Despre”: versiune, descriere, dezvoltator și comenzi rapide (dimensiune fixă, fără scroll).
+# ──────────────────────────────────────────────────────────────────────────────
+
+def make_info_icon(size=20, color=(30, 120, 210)):
+    """Iconiță „info”: un „i” alb pe fundal de buline albastră, desenat cu anti-aliasing (PNG RGBA, fără PIL)."""
+    ss, c = 4, size / 2
+    rows = []
+    for y in range(size):
+        row = bytearray([0])                                     # filtru PNG: none
+        for x in range(size):
+            a = w = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    px, py = (x + (sx + .5) / ss) / size * 20, (y + (sy + .5) / ss) / size * 20
+                    if (px - 10) ** 2 + (py - 10) ** 2 <= 9.4 ** 2:
+                        a += 1
+                        if (px - 10) ** 2 + (py - 5.6) ** 2 <= 1.5 ** 2 or (8.7 <= px <= 11.3 and 8.3 <= py <= 15.4):
+                            w += 1
+            n = ss * ss
+            if a:
+                row += bytes(round((w * 255 + (a - w) * ch) / a) for ch in color)
+                row.append(round(255 * a / n))
+            else:
+                row += b"\0\0\0\0"
+        rows.append(bytes(row))
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xffffffff)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode("ascii")
+
+
+class AboutDialog(tk.Toplevel):
+    """`host` = fereastra principală; folosim: root, t(), f_hk, f_hkb. Dimensiunea o dă conținutul; nu se redimensionează."""
+
+    def __init__(self, host):
+        super().__init__(host.root)
+        self.title(host.t("about_btn"))
+        self.transient(host.root)
+        self.resizable(False, False)
+        outer = ttk.Frame(self, padding=12)
+        outer.pack(fill="both", expand=True)
+        ttk.Label(outer, text=host.t("about_title").format(v=VERSION), style="HkB.TLabel", anchor="w").pack(fill="x", pady=(0, 6))
+        for key in ("about_desc", "about_dev"):
+            ttk.Label(outer, text=host.t(key), style="Hk.TLabel", wraplength=300, justify="left").pack(fill="x", pady=(0, 6))
+        ttk.Separator(outer, orient="horizontal").pack(fill="x", pady=(2, 8))
+        hk = ttk.Frame(outer)
+        hk.pack(fill="x")
+        hk.columnconfigure(0, weight=1)
+        ttk.Label(hk, text=host.t("hk_title"), style="HkB.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        for r, (d, k) in enumerate(HOTKEYS, 1):
+            ttk.Label(hk, text=host.t(d), style="Hk.TLabel", wraplength=160, justify="left").grid(row=r, column=0, sticky="nw", pady=2)
+            ttk.Label(hk, text=host.t(k), style="HkB.TLabel", wraplength=125, justify="right").grid(
+                row=r, column=1, sticky="ne", padx=(6, 0), pady=2)
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+        p = host.root
+        x = p.winfo_rootx() + max(0, (p.winfo_width() - w) // 2)
+        y = p.winfo_rooty() + max(0, (p.winfo_height() - h) // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.minsize(w, h)
+        self.maxsize(w, h)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # SECȚIUNE ui/main_window
 #   Fereastra principală: panou cu comenzi + zonă video (mpv încorporat), listă de canale, scanare, înregistrare.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3674,6 +3765,7 @@ class Main:
 
         for fmt, letters, fn in (("<Key-{}>", "iI", self.on_key_i),                 # informații canal (EPG + semnal)
                                  ("<Control-Key-{}>", "rR", self.toggle_rec),       # pornește/oprește înregistrarea
+                                 ("<Control-Key-{}>", "iI", lambda e: self.show_epg()),   # fereastra Program TV (EPG)
                                  ("<Control-Shift-Key-{}>", "xX", lambda e: self.on_close()),
                                  ("<Key-{}>", "fF", self.on_key_f)):                # ecran complet
             for ch in letters:
@@ -3741,11 +3833,16 @@ class Main:
 
         self.tuner_container = tc = ttk.Frame(main)
         tc.pack(fill="x")
-        self._lbl(tc, "lang_label")
-        self.lang_box = ttk.Combobox(tc, values=LANGS, state="readonly", font=self.f_norm)
+        ttk.Separator(tc, orient="horizontal").pack(fill="x", pady=(0, 5))      # desparte setările de titlu
+        lg_row = ttk.Frame(tc)         # eticheta și selectorul de limbă pe același rând
+        lg_row.pack(fill="x", pady=5)
+        lg_lbl = ttk.Label(lg_row)
+        lg_lbl.pack(side="left", padx=(0, 8))
+        self.tr.append((lg_lbl, "lang_label"))
+        self.lang_box = ttk.Combobox(lg_row, values=LANGS, state="readonly", font=self.f_norm)
         self.lang_box.set(self.lang)
         self.lang_box.bind("<<ComboboxSelected>>", self.on_lang)
-        self.lang_box.pack(fill="x", pady=5)
+        self.lang_box.pack(side="left", fill="x", expand=True)
 
         lrow = ttk.Frame(tc)
         lrow.pack(fill="x", pady=5)
@@ -3817,19 +3914,11 @@ class Main:
         self.bottom_sep = ttk.Separator(bottom, orient="horizontal")
         self.bottom_sep.pack(fill="x", pady=(0, 5))
 
-        # Comenzi rapide: apar deasupra barei de volum doar când setările sunt afișate
-        hk = self.hk_frame = ttk.Frame(bottom)
-        hk.pack(fill="x", pady=(0, 2))
-        hk.columnconfigure(0, weight=1)
-        hk_title = ttk.Label(hk, style="HkB.TLabel")
-        hk_title.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
-        self.tr.append((hk_title, "hk_title"))
-        for r, (d, k) in enumerate(HOTKEYS, 1):
-            dl = ttk.Label(hk, style="Hk.TLabel", wraplength=160, justify="left")
-            kl = ttk.Label(hk, style="HkB.TLabel", wraplength=125, justify="right")
-            dl.grid(row=r, column=0, sticky="nw", pady=1)
-            kl.grid(row=r, column=1, sticky="ne", padx=(6, 0), pady=1)
-            self.tr += [(dl, d), (kl, k)]
+        # „Despre”: buton cu iconiță (i alb pe bulină albastră), deasupra barei de volum; deschide o fereastră separată
+        self.about_win = None
+        self.info_img = tk.PhotoImage(data=make_info_icon())
+        self.about_btn = ttk.Button(bottom, image=self.info_img, compound="left", command=self.show_about)
+        self.tr.append((self.about_btn, "about_btn"))
 
         vol = self.vol_frame = ttk.Frame(bottom)
         vol.pack(fill="x", pady=5)
@@ -3903,12 +3992,14 @@ class Main:
     def set_settings_view(self, show):
         """Setările și (lista de canale + EPG + căutare) se exclud reciproc."""
         self.settings_on = show
-        for w in (self.tuner_container, self.hk_frame, self.epg_lbl, self.main_sep, self.list_frame, self.search):
+        for w in (self.tuner_container, self.about_btn, self.bottom_sep, self.epg_lbl, self.main_sep, self.list_frame, self.search):
             w.pack_forget()
         if show:
             self.tuner_container.pack(fill="x")
-            self.hk_frame.pack(fill="x", pady=(0, 2), before=self.vol_frame)
+            self.about_btn.pack(fill="x", pady=(5, 0), before=self.vol_frame)
+            self.bottom_sep.pack(fill="x", pady=(5, 5), before=self.vol_frame)     # sub „Despre”, deasupra volumului
         else:
+            self.bottom_sep.pack(fill="x", pady=(0, 5), before=self.vol_frame)
             self.epg_lbl.pack(fill="x", pady=5)
             self.main_sep.pack(fill="x", pady=(5, 0))
             self.list_frame.pack(fill="both", expand=True, pady=5)
@@ -3916,6 +4007,12 @@ class Main:
                 self.search.pack(fill="x", pady=5, before=self.bottom_sep)
         self._min_h = 0
         self.root.after_idle(self.fit_min_height)
+
+    def show_about(self):
+        if self.about_win and self.about_win.winfo_exists():
+            self.about_win.lift()
+            return
+        self.about_win = AboutDialog(self)
 
     def layout(self):
         """Aranjează panoul și video-ul: panoul pe partea opusă playerului sau ascuns complet."""
@@ -3982,6 +4079,8 @@ class Main:
             self.on_close()
         elif msg == "toggle-rec":
             self.toggle_rec()
+        elif msg == "show-epg":
+            self.show_epg()
         elif msg in ("vol-up", "vol-down"):
             self.wheel_volume(VOL_WHEEL_STEP if msg == "vol-up" else -VOL_WHEEL_STEP)
 
@@ -4028,6 +4127,8 @@ class Main:
         for w, key in self.tr:
             w.configure(text=self.t(key))
         self.rec_btn.configure(text=self.t("rec_on" if self.rec_on else "rec_off"))
+        if self.about_win and self.about_win.winfo_exists():      # textele ei nu se schimbă din mers: se închide
+            self.about_win.destroy()
         self.refresh_tip.text = self.t("refresh_tip")
         self.cfg_tip.text = self.t("cfg_tip")
         self._sync_stop_btn()
