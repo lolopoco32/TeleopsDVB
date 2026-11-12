@@ -53,14 +53,22 @@ chmod +x teleops.py
 ```
 
 ---
-## ⌨️ Keyboard shortcuts
+
+## ⌨️ Keyboard shortcuts & controls
 | Action | Shortcut |
 |---|---|
-| EPG info | `I` |
-| Start/stop recording | `Ctrl + R` *(new)* |
-| Fullscreen | `F` / `F11` *(new)* |
-| Hide/show interface | `.` / double-click on video *(new)* |
-| Quit program | `Ctrl + Shift + X` *(new)* |
+| Play channel | `Double click` / `Enter` |
+| Add / Remove Favorites | `CTRL + Left Click` |
+| Show/hide search | `Right Click on list` |
+| Channel info | `I` |
+| TV Guide (EPG) | `CTRL + I` |
+| Start/stop recording | `CTRL + R` |
+| Subtitles / audio / mute | `Right click on video` |
+| Volume | `Mouse wheel on video` |
+| Mute / Unmute | `M` |
+| Fullscreen | `F` / `F11` |
+| Hide/show interface | `.` / `double click on video` |
+| Quit program | `CTRL + SHIFT + X` |
 
 ---
 
