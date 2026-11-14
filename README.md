@@ -72,7 +72,7 @@ chmod +x teleops.py
 | Show/hide search | `Right Click on list` |
 | Jump to channel (quick search) | `J` |
 | Previous channel | `Backspace` |
-| Hide list; logo, poster, speaker | `Ctrl + H` / `Click on the title` |
+| Hide list; logo, poster | `Ctrl + H` / `Click on the title` |
 | Channel info (EPG + signal) | `I` |
 | TV Guide (EPG) | `CTRL + I` |
 | Start/stop recording | `CTRL + R` |
