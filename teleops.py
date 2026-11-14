@@ -3971,7 +3971,8 @@ TMDB_LANG = {"RO": "ro-RO", "MD": "ro-RO", "IT": "it-IT", "GB": "en-GB", "DE": "
              "SE": "sv-SE", "NO": "nb-NO", "FI": "fi-FI", "GR": "el-GR", "TR": "tr-TR", "UA": "uk-UA", "IE": "en-IE",
              "US": "en-US", "CA": "en-CA", "AU": "en-AU", "BR": "pt-BR"}
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-NEWS = re.compile(r"\b(stiri(le|lor)?|stire(a)?|news|notizie|telegiornale)\b")        # emisiuni de știri: în loc de poster se desenează un afiș
+NEWS = re.compile(r"\b(stiri(le|lor)?|stire(a)?|news|notizie|telegiornale|tg\s?\d?|rainews\d*|"
+                  r"observator|focus|telejurnal(ul)?|jurnal(ul)?|ultima ora|breaking)\b")        # emisiuni de știri: în loc de poster se desenează un afiș (după titlu)
 NONMOVIE = re.compile(r"\b(stiri|jurnal|telejurnal|meteo|buletin|reclam\w*|teleshopping|sport\w*|emisiune|talk|magazin|concert|muzic\w*|dezbatere|news)\b")
 
 
@@ -5401,8 +5402,9 @@ class Main:
         self._poster_img = self._poster_raw = self._poster_link = None
         self._poster_last_size = (0, 0)
         # Știrile nu au poster (căutarea găsea filme fără legătură, ex. „Stirile” → un film): desenăm un afiș.
-        self._news = bool(ev) and self.show_media_var.get() and bool(
-            NEWS.search(fold(ev[2])) or self.epg_genre(ev) == 2)
+        # Doar după titlu: genul EPG 2 (News/Current affairs) e pus de unele canale (ex. Digi 24) pe toate emisiunile,
+        # inclusiv talk-show-uri („La cină”), așa că nu e un criteriu de încredere pentru afișul de știri.
+        self._news = bool(ev) and self.show_media_var.get() and bool(NEWS.search(fold(ev[2])))
         self._draw_poster()
         if not self.show_media_var.get() or not ev:
             self._poster_last_attempt = 0.0
