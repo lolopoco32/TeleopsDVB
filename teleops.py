@@ -68,8 +68,12 @@ import ctypes
 import base64
 import ctypes.util
 import fcntl
+import difflib
 import functools
+import hashlib
+import gzip
 import json
+import math
 import logging
 import os
 import queue
@@ -85,6 +89,9 @@ import time
 import tkinter as tk
 import zlib
 import tkinter.font as tkfont
+import unicodedata
+import urllib.parse
+import urllib.request
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -103,7 +110,7 @@ from tkinter import filedialog, messagebox, ttk
 # ──────────────────────────────────────────────────────────────────────────────
 
 TITLE = "Teleops DVB"
-VERSION = "3.7.2"
+VERSION = "4.0.0"
 WM_NAME, WM_CLASS = "teleops", "Teleops"   # WM_CLASS al ferestrei: GNOME/KDE îl potrivesc cu fișierul .desktop (iconiță în bara de activități)
 CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
@@ -296,6 +303,34 @@ T = {  # cheie: (ro, en, it)
     "hk_mute": ("Mute / Unmute", "Mute / Unmute", "Mute / Unmute"),
     "hk_mute_k": ("M", "M", "M"),
     "hk_osc_k": ("Click dreapta pe video", "Right click on video", "Clic destro sul video"),
+    "hk_prev": ("Canalul anterior", "Previous channel", "Canale precedente"),
+    "hk_prev_k": ("Backspace", "Backspace", "Backspace"),
+    "hk_jump": ("Salt la canal (căutare rapidă)", "Jump to channel (quick search)", "Vai al canale (ricerca rapida)"),
+    "hk_jump_k": ("J", "J", "J"),
+    "hk_knob": ("Volum / joase / înalte", "Volume / bass / treble", "Volume / bassi / acuti"),
+    "hk_knob_k": ("Trage sau rotiță mouse; dublu click = resetare", "Drag or mouse wheel; double click = reset",
+                  "Trascina o rotellina; doppio clic = reset"),
+    "knob_bass": ("Joase", "Bass", "Bassi"),
+    "knob_treble": ("Înalte", "Treble", "Acuti"),
+    "jump_title": ("Salt la canal", "Jump to channel", "Vai al canale"),
+    "jump_none": ("Niciun canal găsit", "No channel found", "Nessun canale trovato"),
+    "prev_none": ("Niciun canal anterior", "No previous channel", "Nessun canale precedente"),
+    "about_close": ("Închide", "Close", "Chiudi"),
+    "hk_info": ("Ascunde lista; logo, poster, difuzor", "Hide list; logo, poster, speaker", "Nascondi elenco; logo, poster, altoparlante"),
+    "hk_info_k": ("Ctrl+H sau click pe titlu", "Ctrl+H or click on the title", "Ctrl+H o clic sul titolo"),
+    "poster_none": ("Fără poster", "No poster", "Nessun poster"),
+    "autoplay_last": ("Redă ultimul canal la pornire", "Play last channel at startup", "Riproduci l'ultimo canale all'avvio"),
+    "show_media": ("Logo canal și poster film (imprecis)", "Channel logo and movie poster (imprecise)", "Logo canale e locandina film (impreciso)"),
+    "fast_switch": ("Schimbare rapidă a canalelor", "Fast channel switching", "Cambio canale rapido"),
+    "fast_tip": ("Imaginea și sunetul apar cât mai repede: fluxul se analizează mai puțin la pornire, iar oprirea "
+                 "canalului vechi nu mai blochează fereastra. Calitatea video/audio nu se schimbă; subtitrările și "
+                 "pistele audio suplimentare pot apărea cu o mică întârziere. Înlocuiește „Analiză flux” din Configurează MPV.",
+                 "Picture and sound appear as fast as possible: the stream is analysed less at start-up and stopping "
+                 "the old channel no longer blocks the window. Video/audio quality is unchanged; subtitles and extra "
+                 "audio tracks may show up a little later. Overrides “Stream analysis” from Configure MPV.",
+                 "Immagine e audio compaiono il più rapidamente possibile: il flusso viene analizzato meno all'avvio e "
+                 "l'arresto del canale precedente non blocca più la finestra. La qualità video/audio non cambia; "
+                 "sottotitoli e tracce audio extra possono comparire con un lieve ritardo. Sostituisce «Analisi flusso» di Configura MPV."),
     "hk_quit": ("Închide programul", "Quit program", "Chiudi il programma"),
     "hk_quit_k": ("CTRL + SHIFT + X", "CTRL + SHIFT + X", "CTRL + SHIFT + X"),
     # „Despre” (fereastră separată, nerdimensionabilă, deschisă din butonul din setări)
@@ -1183,6 +1218,8 @@ class TSFilter:
         self.sid, self.pmt_pid, self.keep = sid, None, {0}
         self.bufs, self.rest, self.epg = {}, b"", {}
         self.sdt = {}                            # sid -> (service_type, codat?)
+        self.country3 = None                     # cod de țară ISO-3 din TOT (ex. «ROU»), pentru logo-uri
+        self.genre = {}                          # (început, sfârșit, titlu) -> prima cifră din descriptorul de conținut (1 = film)
 
     def feed(self, data):
         data, out, i = self.rest + data, bytearray(), 0
@@ -1194,7 +1231,7 @@ class TSFilter:
                 pid = (data[i + 1] & 0x1F) << 8 | data[i + 2]
                 if pid in self.keep:
                     out += data[i:i + 188]
-                if pid in (0, 0x11, 0x12, self.pmt_pid):
+                if pid in (0, 0x11, 0x12, 0x14, self.pmt_pid):
                     for s in self.sections(pid, data[i:i + 188]):
                         try: self.parse(pid, s)
                         except Exception: pass
@@ -1226,7 +1263,21 @@ class TSFilter:
             del buf[:n]
         if buf[:1] == b"\xff": buf.clear()
 
+    def tot(self, s):
+        """TOT (PID 0x14): descriptorul „local time offset” conține țara în care emite multiplexul."""
+        end, j = min(len(s) - 4, 10 + ((s[8] & 0xF) << 8 | s[9])), 10
+        while j + 2 <= end:
+            tag, ln = s[j], s[j + 1]
+            if tag == 0x58 and ln >= 3:
+                try: self.country3 = bytes(s[j + 2:j + 5]).decode("ascii").upper()
+                except UnicodeDecodeError: pass
+                return
+            j += 2 + ln
+
     def parse(self, pid, s):
+        if pid == 0x14 and s and s[0] == 0x73 and len(s) >= 14:
+            self.tot(s)
+            return
         if len(s) < 12 or not s[5] & 1:
             return
         t, num = s[0], s[3] << 8 | s[4]
@@ -1261,6 +1312,7 @@ class TSFilter:
             eid, mjd = s[i] << 8 | s[i + 1], s[i + 2] << 8 | s[i + 3]
             dl = (s[i + 10] & 0xF) << 8 | s[i + 11]
             d, j, name, text, ext, lang = s[i + 12:i + 12 + dl], 0, "", "", b"", None
+            genre = None
             while j + 2 <= len(d):
                 tag, ln = d[j], d[j + 1]
                 b = d[j + 2:j + 2 + ln]
@@ -1270,11 +1322,15 @@ class TSFilter:
                 elif tag == 0x4E and (lang is None or b[1:4] == lang):
                     n = b[4]
                     ext += b[6 + n:6 + n + b[5 + n]]
+                elif tag == 0x54 and ln >= 2:
+                    genre = b[0] >> 4
                 j += 2 + ln
             if mjd != 0xFFFF:
                 start = (mjd - 40587) * 86400 + bcd(s[i + 4]) * 3600 + bcd(s[i + 5]) * 60 + bcd(s[i + 6])
                 dur = bcd(s[i + 7]) * 3600 + bcd(s[i + 8]) * 60 + bcd(s[i + 9])
                 self.epg[eid] = (start, start + dur, name, "\n".join(x for x in (text, dvb_text(ext)) if x))
+                if genre is not None:
+                    self.genre[(start, start + dur, name)] = genre
             i += 12 + dl
 
     def events(self):
@@ -2050,7 +2106,7 @@ local function on_click()
         menu = nil
     elseif kind == "btn" then
         if v == "spk" then
-            mp.commandv("cycle", "mute")
+            mp.commandv("script-message", "toggle-mute")     -- mute-ul îl face programul (aceeași stare ca rotița de volum)
             menu = nil
         elseif menu == v then
             menu = nil
@@ -2077,8 +2133,6 @@ end
 
 mp.add_forced_key_binding("MBTN_LEFT", "teleops-click", on_click)
 mp.add_forced_key_binding("MBTN_LEFT_DBL", "teleops-dbl", on_dbl)
-mp.add_forced_key_binding("m", "teleops-mute-m", function() mp.commandv("cycle", "mute") end)
-mp.add_forced_key_binding("M", "teleops-mute-M", function() mp.commandv("cycle", "mute") end)
 mp.add_forced_key_binding("MBTN_RIGHT", "teleops-rclick", function()     -- click dreapta: bara apare/dispare (și nu mai pune pauză)
     if shown then hide() else show() end
 end)
@@ -2364,6 +2418,27 @@ end
 mp.observe_property("pause", "bool", function(_, v)
     if v then mp.set_property_bool("pause", false) end
 end)
+
+-- Căutarea „Salt la canal” (J): dacă tastatura a rămas la mpv, toate tastele de text merg la program (teleops-key)
+local cap_names = {}
+local function capture(on)
+    if not on then
+        for _, n in ipairs(cap_names) do mp.remove_key_binding(n) end
+        cap_names = {}
+        return
+    end
+    if #cap_names > 0 then return end
+    local keys = {"SPACE", "BS", "ENTER", "KP_ENTER", "UP", "DOWN", "PGUP", "PGDWN", "ESC", "-", ".",
+                  "ă", "â", "î", "ș", "ț", "ş", "ţ", "Ă", "Â", "Î", "Ș", "Ț", "Ş", "Ţ"}
+    for c = 48, 57 do keys[#keys + 1] = string.char(c) end
+    for c = 65, 90 do keys[#keys + 1] = string.char(c); keys[#keys + 1] = string.char(c + 32) end
+    for _, k in ipairs(keys) do
+        local name = "teleops-cap-" .. k
+        mp.add_forced_key_binding(k, name, function() mp.commandv("script-message", "teleops-key", k) end)
+        cap_names[#cap_names + 1] = name
+    end
+end
+mp.register_script_message("teleops-capture", function(v) capture(v == "1") end)
 '''
 
 
@@ -2718,11 +2793,14 @@ class Streamer:
     OBSERVED = ("volume-max", "volume", "mute", "vo-configured", "audio-params")
     # mesaj -> tastele mpv care îl trimit (cât timp mpv are focusul, Tk nu primește tastele; „i” simplu rămâne nativ mpv)
     KEYS = {"show-info-osd": ("i", "I"), "toggle-ui": (".", "MBTN_LEFT_DBL"), "toggle-fs": ("f", "F", "F11"),
-            "exit-fs": ("ESC",), "toggle-rec": ("Ctrl+r", "Ctrl+R"), "show-epg": ("Ctrl+i", "Ctrl+I"),
-            "vol-up": ("WHEEL_UP",), "vol-down": ("WHEEL_DOWN",), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X")}
+            "toggle-rec": ("Ctrl+r", "Ctrl+R"), "show-epg": ("Ctrl+i", "Ctrl+I"),
+            "vol-up": ("WHEEL_UP",), "vol-down": ("WHEEL_DOWN",), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X"),
+            "prev-channel": ("BS",), "jump-channel": ("j", "J"), "toggle-mute": ("m", "M"),
+            "toggle-info": ("Ctrl+h", "Ctrl+H")}
 
-    def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None):
+    def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None, tone=(0, 0), fast=False):
         self.props, self.on_prop, self.conn = dict(props), on_prop, None
+        self.tone = tuple(tone)
         self.on_msg = on_msg or (lambda *_: None)
         self.osc_hot = False        # cursorul e pe un buton/meniu al mini-OSC-ului din mpv
         self.rec, self.lock = None, threading.Lock()
@@ -2732,41 +2810,57 @@ class Streamer:
         self.ts = TSFilter(sid) if sid and zap_all_pids() else None
         a, f = re.findall(r"\d+", adapter)
         IPC_DIR.mkdir(parents=True, exist_ok=True)
-        self.sock_name = f"teleops-{os.getpid()}.sock"
+        self.sock_name = f"teleops-{os.getpid()}-{os.urandom(4).hex()}.sock"     # unic: cel vechi se închide în fundal
         self.sock = str(IPC_DIR / self.sock_name)
 
         zap_cmd = ["dvbv5-zap", "-c", str(CHANNELS), "-a", a, "-f", f, "-r", "-P" if self.ts else "-p", "-o", "-", channel]
         
-        self.zap = None
-        for attempt in range(2):
-            p = subprocess.Popen(zap_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=get_clean_env())
-            time.sleep(0.3)
-            if p.poll() is None:
-                self.zap = p
-                break
-            try:
-                p.terminate()
-            except Exception:
-                pass
-            if attempt == 0:
-                time.sleep(0.5)
-        
-        if not self.zap:
-            self.zap = subprocess.Popen(zap_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=get_clean_env())
+        # Tunerul pornește imediat, fără așteptări aici: verificarea lui (și reîncercarea) se face în `_boot`,
+        # în timp ce mpv se inițializează în paralel.
+        self._life, self._stopped, self._booting = threading.Lock(), False, True
+        self.zap = subprocess.Popen(zap_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=get_clean_env())
 
         mpv = [*mpv_cmd, "--no-terminal", f"--include={MPV_CONF}", f"--input-ipc-server={self.sock}",
                "--no-input-default-bindings", "--input-conf=/dev/null",      # fără taste implicite mpv (consolă, o, i...): doar cele ale programului
                "--sid=auto", "--sub-visibility=yes", f"--volume={props['volume']}",
                f"--mute={'yes' if props['mute'] else 'no'}", f"--title=TV - {channel.strip()}"]
+        if fast:    # pornire rapidă: flux MPEG-TS cunoscut (fără ghicirea formatului), analiză scurtă; calitatea redării rămâne cea din mpv.conf
+            mpv += ["--ytdl=no", "--demuxer=lavf", "--demuxer-lavf-format=mpegts",
+                    "--demuxer-lavf-probesize=1500000", "--demuxer-lavf-analyzeduration=1"]
         env = get_clean_env()
         if wid:   # încorporat în fereastra Tk: --wid există doar pe X11 (XWayland), deci interzicem backend-ul Wayland
             mpv += [f"--wid={wid}", f"--gpu-context={GPU_CONTEXT}", "--window-dragging=no", "--osc=no", "--osd-bar=no", f"--script={OSC_PATH}"]
             env.pop("WAYLAND_DISPLAY", None)
         self.mpv = subprocess.Popen(mpv + ["-"], stdin=subprocess.PIPE, env=env)
-        for target in (self.pump, self.ipc):
+        for target in (lambda: self._boot(zap_cmd), self.ipc):
             threading.Thread(target=target, daemon=True).start()
 
+    def _boot(self, zap_cmd):
+        """Verifică pornirea tunerului (cel mult 2 reîncercări, ca înainte), apoi trece fluxul către mpv."""
+        try:
+            for attempt in range(3):
+                deadline = time.time() + 0.3
+                while time.time() < deadline and self.zap.poll() is None and not self._stopped:
+                    time.sleep(0.02)
+                if self._stopped or self.zap.poll() is None or attempt == 2:
+                    break
+                try:
+                    self.zap.terminate()
+                except OSError:
+                    pass
+                time.sleep(0.5)
+                with self._life:
+                    if self._stopped:
+                        return
+                    self.zap = subprocess.Popen(zap_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=get_clean_env())
+        finally:
+            self._booting = False
+        if not self._stopped:
+            self.pump()
+
     def alive(self):
+        if self._booting:           # cât se verifică tunerul, un eșec scurt nu înseamnă oprire (reîncercarea e în curs)
+            return self.mpv.poll() is None
         return self.zap.poll() is None and self.mpv.poll() is None
 
     def pump(self):
@@ -2787,7 +2881,7 @@ class Streamer:
         return tr(self.get_lang(), key)
 
     def ipc(self):
-        for _ in range(150):
+        for _ in range(500):
             if not self.alive(): return
             c = socket.socket(socket.AF_UNIX)
             try:
@@ -2795,12 +2889,14 @@ class Streamer:
                 break
             except OSError:
                 c.close()
-                time.sleep(0.1)
+                time.sleep(0.03)
         else:
             return
         self.conn = c
         for k, v in self.props.items():
             self.cmd("set_property", k, v)
+        if any(self.tone):
+            self.set_tone(*self.tone)
         for i, k in enumerate(self.OBSERVED, 1):
             self.cmd("observe_property", i, k)
         
@@ -2838,6 +2934,7 @@ class Streamer:
                         if args[0] == "show-info-osd":
                             self.show_channel_info()
                         elif args[0] == "teleops-osc-hot": self.osc_hot = args[1:2] == ["1"]
+                        elif args[0] == "teleops-key" and len(args) > 1: self.on_msg("key:" + str(args[1]))
                         elif args[0] in self.KEYS: self.on_msg(args[0])
                     elif ev == "property-change" and e.get("data") is not None:
                         self.on_prop(e["name"], e["data"])
@@ -2889,6 +2986,17 @@ class Streamer:
         self.props[name] = value
         self.cmd("set_property", name, value)
 
+    def capture_keys(self, on):
+        """Cât timp e deschisă căutarea J: tastele care ajung la mpv sunt trimise programului (vezi „teleops-capture”)."""
+        self.cmd("script-message", "teleops-capture", "1" if on else "0")
+
+    def set_tone(self, bass, treble):
+        """Joase / înalte (dB) printr-un filtru audio cu etichetă; la 0/0 filtrul se scoate (fără procesare)."""
+        self.tone = (bass, treble)
+        self.cmd("af", "remove", "@tone")
+        if bass or treble:
+            self.cmd("af", "add", f"@tone:lavfi=[bass=g={bass}:f=110,treble=g={treble}:f=3300]")
+
     def send_labels(self):
         self.cmd("script-message", "teleops-labels", self.t("osc_sub"), self.t("osc_audio"), self.t("osc_off"))
         self.cmd("script-message", "teleops-info-labels", self.t("info_video"), self.t("info_audio"),
@@ -2911,17 +3019,39 @@ class Streamer:
         with self.lock:
             if self.rec: self.rec.close(); self.rec = None
 
-    def stop(self):
+    @staticmethod
+    def _reap(p):
+        try:
+            p.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            try:
+                p.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def stop(self, background=False):
+        """Oprește fluxul. Ambele procese primesc semnalul odată; se așteaptă doar tunerul (trebuie eliberat pentru
+        canalul următor). Cu `background=True` mpv se curăță în fundal, ca schimbarea canalului să nu aștepte."""
+        with self._life:
+            self._stopped = True
         self.on_prop = self.on_msg = lambda *_: None
         self.stop_rec()
         for p in (self.zap, self.mpv):
             try:
                 p.terminate()
-                p.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                p.kill()
-        subprocess.run(["pkill", "-f", self.sock_name], stderr=subprocess.DEVNULL, env=get_clean_env())
-        Path(self.sock).unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._reap(self.zap)
+
+        def rest():
+            self._reap(self.mpv)
+            subprocess.run(["pkill", "-f", self.sock_name], stderr=subprocess.DEVNULL, env=get_clean_env())
+            Path(self.sock).unlink(missing_ok=True)
+        if background:
+            threading.Thread(target=rest, daemon=True).start()
+        else:
+            rest()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2937,14 +3067,16 @@ class Streamer:
 VOL_MAX = 130           # volume-max implicit în mpv
 VOL_WHEEL_STEP = 5      # procente de volum la fiecare „clic” al rotiței de mouse de pe video
 TXT_DARK = "#000000"    # culoare text implicită
+TONE_MAX = 10           # joase / înalte: ±10 dB
 LIST_MIN_H = 150        # înălțimea minimă (px) a listei de canale la strângerea ferestrei
 CFG_W, CFG_GAP = 36, 5     # lățimea butonului ⚙ și spațiul dintre el și butonul EPG
 PANEL_W = 320           # lățimea fixă a panoului cu comenzi
 VIDEO_MIN_W = 480       # lățimea minimă a zonei video
 
 HOTKEYS = (("hk_play", "hk_play_k"), ("hk_fav", "hk_fav_k"), ("hk_search", "hk_search_k"),      # lista de canale
+           ("hk_jump", "hk_jump_k"), ("hk_prev", "hk_prev_k"), ("hk_info", "hk_info_k"),
            ("hk_epg", "hk_epg_k"), ("hk_epgwin", "hk_epgwin_k"), ("hk_rec", "hk_rec_k"),                                      # canalul curent
-           ("hk_osc", "hk_osc_k"), ("hk_vol", "hk_vol_k"), ("hk_mute", "hk_mute_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),   # video
+           ("hk_osc", "hk_osc_k"), ("hk_vol", "hk_vol_k"), ("hk_knob", "hk_knob_k"), ("hk_mute", "hk_mute_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),   # video
            ("hk_quit", "hk_quit_k"))                                                            # program
 
 
@@ -3650,7 +3782,7 @@ class MpvDialog(tk.Toplevel):
 #   Fereastra „Despre”: versiune, descriere, dezvoltator și comenzi rapide (dimensiune fixă, fără scroll).
 # ──────────────────────────────────────────────────────────────────────────────
 
-def make_info_icon(size=20, color=(30, 120, 210)):
+def make_info_icon(size=14, color=(30, 120, 210)):
     """Iconiță „info”: un „i” alb pe fundal de buline albastră, desenat cu anti-aliasing (PNG RGBA, fără PIL)."""
     ss, c = 4, size / 2
     rows = []
@@ -3693,25 +3825,834 @@ class AboutDialog(tk.Toplevel):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=host.t("about_title").format(v=VERSION), style="HkB.TLabel", anchor="w").pack(fill="x", pady=(0, 6))
         for key in ("about_desc", "about_dev"):
-            ttk.Label(outer, text=host.t(key), style="Hk.TLabel", wraplength=300, justify="left").pack(fill="x", pady=(0, 6))
+            ttk.Label(outer, text=host.t(key), style="Hk.TLabel", wraplength=520, justify="left").pack(fill="x", pady=(0, 6))
         ttk.Separator(outer, orient="horizontal").pack(fill="x", pady=(2, 8))
         hk = ttk.Frame(outer)
         hk.pack(fill="x")
-        hk.columnconfigure(0, weight=1)
-        ttk.Label(hk, text=host.t("hk_title"), style="HkB.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        # Două jumătăți egale, fără separator vizibil: descrierile se aliniază spre centru,
+        # iar combinațiile de taste pornesc din centru spre dreapta.
+        hk.columnconfigure(0, weight=1, uniform="hotkeys")
+        hk.columnconfigure(1, weight=1, uniform="hotkeys")
+        ttk.Label(hk, text=host.t("hk_title"), style="HkB.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         for r, (d, k) in enumerate(HOTKEYS, 1):
-            ttk.Label(hk, text=host.t(d), style="Hk.TLabel", wraplength=160, justify="left").grid(row=r, column=0, sticky="nw", pady=2)
-            ttk.Label(hk, text=host.t(k), style="HkB.TLabel", wraplength=125, justify="right").grid(
-                row=r, column=1, sticky="ne", padx=(6, 0), pady=2)
+            ttk.Label(hk, text=host.t(d), style="Hk.TLabel", wraplength=300, justify="right", anchor="e").grid(
+                row=r, column=0, sticky="e", padx=(0, 12), pady=2)
+            ttk.Label(hk, text=host.t(k), style="HkB.TLabel", wraplength=280, justify="left", anchor="w").grid(
+                row=r, column=1, sticky="w", padx=(12, 0), pady=2)
+        # Buton lat, pe toată lățimea ferestrei, în continuitate cu butoanele panoului.
+        ttk.Button(outer, text=host.t("about_close"), command=self.destroy).pack(fill="x", pady=(12, 0))
         self.bind("<Escape>", lambda e: self.destroy())
         self.update_idletasks()
         w, h = self.winfo_reqwidth(), self.winfo_reqheight()
         p = host.root
         x = p.winfo_rootx() + max(0, (p.winfo_width() - w) // 2)
         y = p.winfo_rooty() + max(0, (p.winfo_height() - h) // 2)
+        y = max(0, min(y, self.winfo_screenheight() - h - 40))
         self.geometry(f"{w}x{h}+{x}+{y}")
         self.minsize(w, h)
         self.maxsize(w, h)
+
+def fold(s):
+    """Text fără diacritice și majuscule (căutarea găsește «Pro TV» și cu «pro tv», «Știri» cu «stiri»)."""
+    return "".join(c for c in unicodedata.normalize("NFD", s.casefold()) if not unicodedata.combining(c))
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECȚIUNE media  ·  Logo-uri de posturi, postere de filme (cu link IMDb), grila de difuzor retro
+# ──────────────────────────────────────────────────────────────────────────────
+CACHE_DIR = CONF_DIR / "cache"
+IPTV_CHANNELS = "https://iptv-org.github.io/api/channels.json"      # baza de date deschisă iptv-org (canale + țară)
+IPTV_LOGOS = "https://iptv-org.github.io/api/logos.json"
+CC3 = {"ROU": "RO", "MDA": "MD", "ITA": "IT", "GBR": "GB", "DEU": "DE", "FRA": "FR", "ESP": "ES", "PRT": "PT", "HUN": "HU",
+       "BGR": "BG", "SRB": "RS", "HRV": "HR", "SVN": "SI", "SVK": "SK", "CZE": "CZ", "POL": "PL", "AUT": "AT", "CHE": "CH",
+       "BEL": "BE", "NLD": "NL", "DNK": "DK", "SWE": "SE", "NOR": "NO", "FIN": "FI", "GRC": "GR", "TUR": "TR", "UKR": "UA",
+       "IRL": "IE", "LUX": "LU", "ALB": "AL", "MKD": "MK", "BIH": "BA", "MNE": "ME", "LTU": "LT", "LVA": "LV", "EST": "EE",
+       "CYP": "CY", "MLT": "MT", "ISL": "IS", "USA": "US", "CAN": "CA", "AUS": "AU", "BRA": "BR"}
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+NONMOVIE = re.compile(r"\b(stiri|jurnal|telejurnal|meteo|buletin|reclam\w*|teleshopping|sport\w*|emisiune|talk|magazin|concert|muzic\w*|dezbatere|news)\b")
+
+
+def mlog(msg, *args):
+    """Jurnal pentru logo/poster: ~/.config/TeleopsDVB/media.log (mic, se rotește). Util dacă nu apar imaginile."""
+    lg = logging.getLogger("teleops.media")
+    if not lg.handlers:
+        lg.setLevel(logging.INFO)
+        lg.propagate = False
+        try:
+            from logging.handlers import RotatingFileHandler
+            h = RotatingFileHandler(CONF_DIR / "media.log", maxBytes=200_000, backupCount=1, encoding="utf-8")
+            h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+            lg.addHandler(h)
+        except OSError:
+            lg.addHandler(logging.NullHandler())
+    lg.info(msg, *args)
+
+
+_SSL_CTX = []
+
+
+def _ssl_context():
+    """Contextul SSL: întâi certificatele sistemului (în aplicațiile împachetate, Python nu le găsește singur), apoi certifi."""
+    if not _SSL_CTX:
+        import ssl
+        ctx = None
+        for cafile in (os.environ.get("SSL_CERT_FILE"), "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+                       "/etc/ssl/cert.pem", "/etc/ssl/ca-bundle.pem"):
+            if cafile and Path(cafile).exists():
+                try:
+                    ctx = ssl.create_default_context(cafile=cafile)
+                    break
+                except (OSError, ssl.SSLError):
+                    pass
+        if ctx is None:
+            try:
+                import certifi
+                ctx = ssl.create_default_context(cafile=certifi.where())
+            except (ImportError, OSError):
+                ctx = ssl.create_default_context()
+        _SSL_CTX.append(ctx)
+    return _SSL_CTX[0]
+
+
+def http_get(url, timeout=12, limit=80_000_000):
+    """Descarcă un URL; face fallback SSL la erori de certificat și întoarce None la alte erori."""
+    import ssl
+    req = urllib.request.Request(url, headers={"User-Agent": f"Mozilla/5.0 TeleopsDVB/{VERSION}", "Accept-Encoding": "gzip",
+                                               "Accept": "*/*"})
+    for ctx in (_ssl_context(), ssl._create_unverified_context()):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+                data = r.read(limit)
+                return gzip.decompress(data) if r.headers.get("Content-Encoding") == "gzip" else data
+        except ssl.SSLCertVerificationError as e:
+            mlog("SSL fallback pentru %s: %s", url, e)
+            continue
+        except Exception as e:
+            mlog("GET eșuat %s: %s", url, e)
+            return None
+    return None
+
+
+def norm_name(s):
+    s = re.sub(r"[^a-z0-9+ ]+", " ", fold(s))
+    s = re.sub(r"\b(hd|fhd|uhd|4k|sd|hevc|h265|h264|dvb|mpeg4|mpeg2)\b", " ", s)
+    return " ".join(t for t in s.split() if t != "+")
+
+
+def name_variants(s):
+    n = norm_name(s)
+    v = {n, n.replace(" ", "")}
+    for suf in (" ro", " md", " romania", " moldova", " tv", " channel", " international"):
+        if n.endswith(suf):
+            base = n[:-len(suf)].strip()
+            if base:
+                v |= {base, base.replace(" ", "")}
+                v.add(base + " romania")
+                v.add(base + " tv")
+    if n and not n.endswith(" tv"):
+        v.add(n + " tv")
+        v.add((n + " tv").replace(" ", ""))
+    return {x for x in v if x}
+
+
+def image_to_png(data, max_w, max_h):
+    """Orice imagine (JPEG, PNG, WEBP...) -> PNG încadrat în max_w x max_h. Încearcă PIL, apoi ffmpeg, apoi mpv (convertor);
+    la urmă, un PNG/GIF se folosește ca atare (Tk îl micșorează). None dacă nu se poate."""
+    if not data:
+        return None
+    try:
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        im = im.convert("RGBA")
+        im.thumbnail((max_w, max_h), getattr(Image, "Resampling", Image).LANCZOS)
+        out = io.BytesIO()
+        im.save(out, "PNG")
+        mlog("imagine convertită cu PIL (%d octeți)", len(data))
+        return out.getvalue()
+    except ImportError:
+        pass
+    except Exception as e:
+        mlog("PIL a eșuat: %s", e)
+    scale = f"scale=w='min(iw,{max_w})':h='min(ih,{max_h})':force_original_aspect_ratio=decrease"
+    ff = shutil.which("ffmpeg")
+    if ff:
+        try:
+            r = subprocess.run([ff, "-v", "error", "-i", "pipe:0", "-vf", scale, "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"],
+                               input=data, capture_output=True, timeout=25, env=get_clean_env())
+            if r.returncode == 0 and r.stdout.startswith(PNG_MAGIC):
+                mlog("imagine convertită cu ffmpeg (%d octeți)", len(data))
+                return r.stdout
+            mlog("ffmpeg a eșuat: %s", r.stderr[-200:])
+        except (OSError, subprocess.SubprocessError) as e:
+            mlog("ffmpeg a eșuat: %s", e)
+    mpv = shutil.which("mpv")
+    if mpv:
+        import tempfile
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                (Path(td) / "in.img").write_bytes(data)
+                r = subprocess.run([mpv, "--no-config", "--no-terminal", "--really-quiet", "--ao=null", "--vo=image", "--vo-image-format=png",
+                                    f"--vo-image-outdir={td}", "--frames=1", f"--vf=lavfi=[{scale}]", str(Path(td) / "in.img")],
+                                   capture_output=True, timeout=25, env=get_clean_env())
+                out = next(iter(sorted(Path(td).glob("*.png"))), None)
+                if out:
+                    mlog("imagine convertită cu mpv (%d octeți)", len(data))
+                    return out.read_bytes()
+                mlog("mpv nu a produs imaginea: %s", r.stderr[-200:])
+        except (OSError, subprocess.SubprocessError) as e:
+            mlog("mpv a eșuat: %s", e)
+    if data[:8] == PNG_MAGIC or data[:3] == b"GIF":
+        mlog("imagine folosită ca atare (fără convertor)")
+        return data
+    mlog("imagine neconvertibilă (nici PIL, nici ffmpeg, nici mpv); primii octeți: %r", data[:8])
+    return None
+
+
+def fit_photo(img, w, h):
+    """Micșorează un PhotoImage întreg (subsample) până încape în w x h."""
+    f = max(-(-img.width() // max(w, 1)), -(-img.height() // max(h, 1)), 1)
+    return img.subsample(f) if f > 1 else img
+
+
+def clean_title(t):
+    t = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", t or "")
+    t = re.sub(
+        r"^(film(ul)?( artistic| serial| de actiune| de acțiune)?|serial(ul)?|premier[aă]|reluare|telenovel[aă]|super ?film|în direct|in direct|live)\s*[:\-–]\s*",
+        "", t, flags=re.I
+    )
+    t = re.sub(
+        r"\bS\d{1,2}\b.*$|\bsezon(ul)?\s*\d+.*$|\bep(izod(ul)?)?\.?\s*\d+.*$|[-–:]\s*partea\s*[0-9ivx]+.*$",
+        "", t, flags=re.I
+    )
+    t = re.sub(r"\b(premier[aă]|reluare|dublat|subtitrat|16:9|4:3)\b", " ", t, flags=re.I)
+    return re.sub(r"\s+", " ", re.sub(r"[„”“\"']", "", t)).strip(" -–:.,")
+
+
+def _title_queries(q):
+    """Generează variante ordonate de căutare (titlu complet, apoi titlul principal fără subtitlu)."""
+    out = []
+    for cand in (q, re.split(r"\s*[:\-–]\s*", q, maxsplit=1)[0].strip()):
+        if len(cand) >= 3 and cand not in out:
+            out.append(cand)
+    return out
+
+
+class MediaLookup:
+    """Logo-urile (iptv-org, după țară) și posterele (IMDb / Apple / TVmaze / opțional TMDB) se caută în fire separate
+    și se țin în ~/.config/TeleopsDVB/cache, ca fiecare lucru să se descarce o singură dată."""
+
+    def __init__(self, tmdb_key=""):
+        self.lock, self.tmdb_key = threading.Lock(), (tmdb_key or "").strip()
+        self.logos, self.logos_fail, self.glob = {}, {}, None
+        self._logo_miss = {}
+        self.posters = {}
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            self.posters = json.loads((CACHE_DIR / "posters.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+
+    # ---- imagini
+    def fetch_image(self, url):
+        f = CACHE_DIR / ("img_" + hashlib.sha1(url.encode()).hexdigest()[:16] + ".bin")
+        try:
+            if f.exists():
+                return f.read_bytes()
+        except OSError:
+            pass
+        data = http_get(url, 15, 15_000_000)
+        if data and len(data) > 200:
+            try:
+                f.write_bytes(data)
+            except OSError:
+                pass
+            return data
+        return None
+
+    # ---- logo
+    def _rebuild_logo_indexes(self, cc):
+        raw = http_get(IPTV_CHANNELS, 90)
+        if not raw:
+            self.logos_fail[cc] = time.time()
+            return None
+        try:
+            chans = json.loads(raw)
+            lraw = http_get(IPTV_LOGOS, 90)
+            by = {}
+            for l in (json.loads(lraw) if lraw else []):
+                by.setdefault(l.get("channel"), []).append(l)
+        except ValueError:
+            self.logos_fail[cc] = time.time()
+            return None
+        items, glob = [], {}
+        for c in chans:
+            if c.get("closed"):
+                continue
+            cand = [l for l in by.get(c.get("id"), [])
+                    if str(l.get("format", "")).upper() in ("PNG", "JPEG", "JPG", "GIF") and l.get("url")]
+            cand.sort(key=lambda l: (str(l.get("format")).upper() == "PNG",
+                                     (l.get("width") or 0) * (l.get("height") or 0)
+                                     if (l.get("width") or 0) * (l.get("height") or 0) <= 1_000_000 else 0))
+            url = cand[-1]["url"] if cand else c.get("logo")
+            if not url:
+                continue
+            names = [c.get("name", "")] + list(c.get("alt_names") or [])
+            if c.get("country") == cc:
+                items.append({"n": names, "u": url})
+            for n in names:
+                for v in name_variants(n):
+                    glob.setdefault(v, []).append([c.get("country") or "", url])
+        try:
+            (CACHE_DIR / f"logos_{cc}.json").write_text(
+                json.dumps({"v": 3, "ts": time.time(), "items": items}), encoding="utf-8"
+            )
+            (CACHE_DIR / "logos_all.json").write_text(
+                json.dumps({"v": 3, "ts": time.time(), "g": glob}), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        self.glob = glob
+        mlog("index logo %s construit: %d canale în țară, %d variante globale", cc, len(items), len(glob))
+        for it in items:
+            it["v"] = set().union(*(name_variants(n) for n in it["n"]))
+        self.logos[cc] = items
+        return items
+
+    def _logo_items(self, cc):
+        with self.lock:
+            if cc in self.logos:
+                return self.logos[cc]
+            if time.time() - self.logos_fail.get(cc, 0) < 120:
+                return None
+            f = CACHE_DIR / f"logos_{cc}.json"
+            gfile = CACHE_DIR / "logos_all.json"
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                if time.time() - d.get("ts", 0) < 30 * 86400 and d.get("v") == 3 and gfile.exists():
+                    items = d["items"]
+                    for it in items:
+                        it["v"] = set().union(*(name_variants(n) for n in it["n"]))
+                    self.logos[cc] = items
+                    return items
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            return self._rebuild_logo_indexes(cc)
+
+    def _global(self):
+        if self.glob is None:
+            try:
+                d = json.loads((CACHE_DIR / "logos_all.json").read_text(encoding="utf-8"))
+                self.glob = d["g"] if d.get("v") == 3 else {}
+            except (OSError, ValueError, KeyError, TypeError):
+                self.glob = {}
+        return self.glob
+
+    def logo_bytes(self, channel, cc):
+        mkey = (norm_name(channel), cc)
+        if time.time() - self._logo_miss.get(mkey, 0) < 300:
+            return None
+        items = self._logo_items(cc)
+        if items is None:
+            items = []
+            mlog("index local %s indisponibil; încerc indexul global pentru '%s'", cc, channel)
+        q = name_variants(channel)
+        hit = next((it for it in items if q & it["v"]), None)
+        if not hit and items:
+            qn, best = norm_name(channel), 0.0
+            for it in items:
+                for n in it["n"]:
+                    r = difflib.SequenceMatcher(None, qn, norm_name(n)).ratio()
+                    if r > best:
+                        best, hit = r, it
+            if best < 0.85:
+                hit = None
+        if hit:
+            mlog("logo '%s' (%s): găsit în țară -> %s", channel, cc, hit["u"])
+            img = self.fetch_image(hit["u"])
+            if img:
+                return img
+        g = self._global()
+        for v in sorted(q, key=len, reverse=True):
+            c = g.get(v)
+            if c:
+                url = (next((u for k, u in c if k == cc), None)
+                       or next((u for k, u in c if k == "RO"), None)
+                       or c[0][1])
+                mlog("logo '%s' (%s): găsit în indexul global -> %s", channel, cc, url)
+                img = self.fetch_image(url)
+                if img:
+                    return img
+        self._logo_miss[mkey] = time.time()
+        mlog("logo '%s' (%s): negăsit (variante: %s)", channel, cc, sorted(q))
+        return None
+
+    # ---- poster
+    def _imdb(self, q, year, genre):
+        qf = fold(q)
+        first = qf[:1] if qf[:1].isalnum() and qf[:1].isascii() else "x"
+        qq = urllib.parse.quote(qf)
+        raw = (http_get(f"https://v3.sg.imdbws.com/suggestion/titles/{first}/{qq}.json", 10)
+               or http_get(f"https://v2.sg.media-imdb.com/suggestion/{first}/{qq}.json", 10))
+        if not raw:
+            return None
+        try:
+            res = [d for d in json.loads(raw).get("d", []) if str(d.get("id", "")).startswith("tt")
+                   and d.get("qid") in ("movie", "tvMovie", "tvSeries", "tvMiniSeries", "video")]
+        except (ValueError, AttributeError, TypeError):
+            return None
+        qn = norm_name(q)
+        for i, d in enumerate(res):
+            r = difflib.SequenceMatcher(None, qn, norm_name(d.get("l", ""))).ratio()
+            if r >= 0.76 or (year and d.get("y") == year and r >= 0.48) or (genre == 1 and i == 0 and r >= 0.45):
+                img = (d.get("i") or {}).get("imageUrl")
+                if img:
+                    img = re.sub(r"\._V1_.*(\.\w+)$", r"._V1_UY540_\1", img)
+                    return {"imdb": f"https://www.imdb.com/title/{d['id']}/", "img": img, "source": "IMDb"}
+        return None
+
+    def _apple(self, q, year, genre):
+        """Caută postere în catalogul Apple/iTunes Search API (întâi RO, apoi US dacă nu găsește)."""
+        media = "movie" if genre in (None, 1) else "tvShow"
+        entity = "movie" if media == "movie" else "tvSeason"
+        qn = norm_name(q)
+        for store in ("ro", "us"):
+            params = urllib.parse.urlencode({"term": q, "media": media, "entity": entity, "country": store, "limit": 25})
+            raw = http_get("https://itunes.apple.com/search?" + params, 10)
+            if not raw:
+                continue
+            try:
+                res = json.loads(raw).get("results", [])
+            except (ValueError, AttributeError, TypeError):
+                continue
+            for i, r in enumerate(res):
+                name = r.get("trackName") or r.get("collectionName") or ""
+                sim = difflib.SequenceMatcher(None, qn, norm_name(name)).ratio()
+                ry = int((r.get("releaseDate") or "0")[:4] or 0)
+                if sim >= 0.75 or (year and ry == year and sim >= 0.48) or (genre == 1 and i == 0 and sim >= 0.48):
+                    img = r.get("artworkUrl600") or r.get("artworkUrl100")
+                    if img:
+                        img = re.sub(r"\d+x\d+bb", "600x900bb", img)
+                        return {"imdb": None, "img": img, "source": f"Apple-{store.upper()}"}
+        return None
+
+    def _tvmaze(self, q, year):
+        """Caută afișe de seriale/emisiuni în TVmaze (API public, fără cheie)."""
+        raw = http_get("https://api.tvmaze.com/search/shows?q=" + urllib.parse.quote(q), 10)
+        if not raw:
+            return None
+        try:
+            res = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        qn = norm_name(q)
+        for i, item in enumerate(res):
+            show = item.get("show") or {}
+            name = show.get("name") or ""
+            sim = difflib.SequenceMatcher(None, qn, norm_name(name)).ratio()
+            premiered = int((show.get("premiered") or "0")[:4] or 0)
+            if sim >= 0.75 or (year and premiered == year and sim >= 0.48) or (i == 0 and sim >= 0.52):
+                img = show.get("image") or {}
+                url = img.get("original") or img.get("medium")
+                if url:
+                    return {"imdb": show.get("url"), "img": url, "source": "TVmaze"}
+        return None
+
+    def _tmdb(self, q, year, genre):
+        k = urllib.parse.quote(self.tmdb_key)
+        raw = http_get(
+            f"https://api.themoviedb.org/3/search/multi?api_key={k}&language=ro-RO&include_adult=false&query={urllib.parse.quote(q)}",
+            10
+        )
+        if not raw:
+            return None
+        try:
+            res = [r for r in json.loads(raw).get("results", []) if r.get("media_type") in ("movie", "tv")]
+        except (ValueError, AttributeError, TypeError):
+            return None
+        qn = norm_name(q)
+        for i, r in enumerate(res):
+            titles = [r.get("title"), r.get("name"), r.get("original_title"), r.get("original_name")]
+            sim = max((difflib.SequenceMatcher(None, qn, norm_name(t)).ratio() for t in titles if t), default=0)
+            ry = int((r.get("release_date") or r.get("first_air_date") or "0")[:4] or 0)
+            if sim >= 0.72 or (year and ry == year and sim >= 0.48) or (genre == 1 and i == 0 and sim >= 0.45):
+                ext = http_get(f"https://api.themoviedb.org/3/{r['media_type']}/{r['id']}/external_ids?api_key={k}", 10)
+                try:
+                    imdb = json.loads(ext).get("imdb_id")
+                except (ValueError, AttributeError, TypeError):
+                    imdb = None
+                return {
+                    "imdb": f"https://www.imdb.com/title/{imdb}/" if imdb else None,
+                    "img": ("https://image.tmdb.org/t/p/w500" + r["poster_path"]) if r.get("poster_path") else None,
+                    "source": "TMDB"
+                }
+        return None
+
+    def poster(self, title, text, genre):
+        """(octeți imagine | None, link IMDb | None). Caută titlul curățat și variantele sale."""
+        q = clean_title(title)
+        if len(q) < 3:
+            return None, None
+        m = re.search(r"\b(19[2-9]\d|20[0-3]\d)\b", title + " " + (text or "")[:300])
+        year = int(m.group(1)) if m else None
+        key = norm_name(q) + "|" + str(year or "")
+        hit = self.posters.get(key)
+        if not hit or (not hit.get("img") and time.time() - hit.get("ts", 0) > 90):
+            found = None
+            for cand_q in _title_queries(q):
+                if self.tmdb_key:
+                    found = self._tmdb(cand_q, year, genre)
+                if not (found and found.get("img")):
+                    found = self._apple(cand_q, year, genre)
+                if not (found and found.get("img")):
+                    found = self._imdb(cand_q, year, genre)
+                if not (found and found.get("img")):
+                    found = self._tvmaze(cand_q, year)
+                if found and found.get("img"):
+                    break
+            hit = found or {}
+            hit["ts"] = time.time()
+            self.posters[key] = hit
+            try:
+                (CACHE_DIR / "posters.json").write_text(json.dumps(self.posters), encoding="utf-8")
+            except OSError:
+                pass
+        link = hit.get("imdb") or (
+            "https://www.imdb.com/find/?s=tt&q=" + urllib.parse.quote(q)
+            if hit is not None and genre in (None, 1) else None
+        )
+        img_bytes = self.fetch_image(hit["img"]) if hit.get("img") else None
+        if hit.get("img") and not img_bytes:
+            hit["img"] = None
+            hit["ts"] = 0
+            try:
+                (CACHE_DIR / "posters.json").write_text(json.dumps(self.posters), encoding="utf-8")
+            except OSError:
+                pass
+        mlog("poster '%s' (an %s, gen %s): sursa=%s imdb=%s imagine=%s ok=%s",
+             q, year, genre, hit.get("source", "-"), hit.get("imdb"), hit.get("img"), bool(img_bytes))
+        return img_bytes, link
+
+
+def _smooth(t):
+    t = 0.0 if t < 0 else 1.0 if t > 1 else t
+    return t * t * (3 - 2 * t)
+
+
+def _over(buf, i, rgb, a):
+    """Compune un pixel (alfa neprecalculat) peste cel din `buf`."""
+    if a <= 0:
+        return
+    a = 1.0 if a > 1 else a
+    j = i * 4
+    da = buf[j + 3] / 255.0
+    k = da * (1 - a)
+    oa = a + k
+    for n in range(3):
+        buf[j + n] = max(0, min(255, int((rgb[n] * a + buf[j + n] * k) / oa + 0.5)))
+    buf[j + 3] = int(oa * 255 + 0.5)
+
+
+def _png_b64(size, rgba, height=None):
+    height = height or size
+    rows = b"".join(b"\0" + bytes(rgba[y * size * 4:(y + 1) * size * 4]) for y in range(height))
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xffffffff)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, height, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(rows, 1)) + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode("ascii")
+
+
+_KNOB_BASE = {}
+KNOB_AMBER, KNOB_RED, KNOB_UNLIT, KNOB_CREAM = (232, 144, 44), (224, 68, 42), (104, 104, 104), (244, 233, 201)
+
+
+def _knob_base(S):
+    """Partea fixă a rotiței (umbră, mărgine zimțată cromată, capac negru de bachelită) + pixelii celor 11 gradații.
+    Anti-aliasing analitic (acoperire pe pixel), fără PIL; se calculează o singură dată și o folosesc toate rotițele."""
+    if S in _KNOB_BASE:
+        return _KNOB_BASE[S]
+    c, r_edge, r_face = S / 2, 23.0, 19.4
+    buf = bytearray(S * S * 4)
+    for y in range(S):
+        dy = y + 0.5 - c
+        for x in range(S):
+            dx, i = x + 0.5 - c, y * S + x
+            _over(buf, i, (0, 0, 0), 0.36 * _smooth((r_edge + 3.5 - math.hypot(dx - 1.6, dy - 2.4)) / 5.0))   # umbra
+            r = math.hypot(dx, dy)
+            if r > r_edge + 1.2:
+                continue
+            phi = math.atan2(dy, dx)
+            edge = r_edge + 0.55 * math.cos(32 * phi)                  # marginea zimțată (32 de dinți)
+            cov = edge - r + 0.5
+            if cov <= 0:
+                continue
+            light = 0.5 + 0.5 * math.cos(phi + 2.356)                   # lumină din stânga-sus
+            lum = 100 + 105 * light + 12 * math.cos(32 * phi)
+            skirt = (lum, lum * 0.97, lum * 0.88)                       # crom ușor cald
+            fl = 32 + 40 * max(0.0, 1 - math.hypot(dx + 7.5, dy + 8.5) / 27.0)
+            bev = 1 - 0.65 * _smooth((r - (r_face - 1.8)) / 1.8)        # muchie teșită, mai închisă
+            face = (fl * 1.0 * bev, fl * 0.94 * bev, fl * 0.88 * bev)
+            w = min(1.0, max(0.0, r_face - r + 0.5))
+            col = [skirt[n] * (1 - w) + face[n] * w for n in range(3)]
+            ol = 0.5 * _smooth((r - (edge - 1.2)) / 1.2)                # contur subțire, închis
+            col = [col[n] * (1 - ol) + (45, 42, 40)[n] * ol for n in range(3)]
+            _over(buf, i, col, cov)
+    ticks = []
+    for k in range(11):                                                 # gradațiile din jur, pe 270°
+        ang = math.radians(225 - 27 * k)
+        ux, uy = math.cos(ang), -math.sin(ang)
+        r0, r1, wd = (26.2, 31.8, 2.5) if k % 5 == 0 else (27.6, 31.2, 1.8)
+        x0, y0, x1, y1 = c + ux * r0, c + uy * r0, c + ux * r1, c + uy * r1
+        vx, vy = x1 - x0, y1 - y0
+        l2, pix = vx * vx + vy * vy, []
+        for y in range(max(0, int(min(y0, y1) - 3)), min(S, int(max(y0, y1) + 4))):
+            for x in range(max(0, int(min(x0, x1) - 3)), min(S, int(max(x0, x1) + 4))):
+                px, py = x + 0.5, y + 0.5
+                t = max(0.0, min(1.0, ((px - x0) * vx + (py - y0) * vy) / l2))
+                cv = wd / 2 + 0.5 - math.hypot(px - x0 - t * vx, py - y0 - t * vy)
+                if cv > 0:
+                    pix.append((y * S + x, cv))
+        ticks.append(pix)
+    _KNOB_BASE[S] = (buf, ticks)
+    return _KNOB_BASE[S]
+
+
+class Knob(tk.Canvas):
+    """Rotiță de reglaj în stil retro (capac negru, margine cromată zimțată, gradații care se aprind ca la un amplificator
+    vechi). Se trage sus/jos sau se rotește cu rotița mouse-ului; dublu click = valoarea implicită. Gradațiile se aprind
+    de la `origin` spre valoare (minim la volum, mijloc la joase/înalte); peste `warn_above` devin roșii."""
+    S = 68
+
+    def __init__(self, master, *, lo, hi, value, origin, step, wheel_step, default, fmt, command, bg, font, warn_above=None):
+        super().__init__(master, width=self.S, height=self.S, bg=bg, highlightthickness=0, cursor="hand2")
+        self.lo, self.hi, self.value, self.origin = lo, hi, value, origin
+        self.step, self.wheel_step, self.default = step, wheel_step, default
+        self.fmt, self.command, self.warn_above = fmt, command, warn_above
+        self._drag, self._cache = None, {}
+        self._tf = tkfont.Font(font=font)
+        self._tf.configure(size=-10)
+        self._item = self.create_image(self.S / 2, self.S / 2)
+        self._txt = self.create_text(self.S / 2, self.S / 2, font=self._tf, fill="#f4e9c9")
+        self.bind("<ButtonPress-1>", lambda e: setattr(self, "_drag", (e.y, self.value)))
+        self.bind("<B1-Motion>", self._moved)
+        self.bind("<Double-Button-1>", lambda e: self._apply(self.default))
+        for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.bind(ev, self._wheel)
+        self.draw()
+
+    def _frac(self, v):
+        return (v - self.lo) / ((self.hi - self.lo) or 1)
+
+    def _image(self):
+        key = (self.value, self.hi)
+        img = self._cache.get(key)
+        if img is None:
+            base, ticks = _knob_base(self.S)
+            buf, fv, fo = bytearray(base), self._frac(self.value), self._frac(self.origin)
+            warn = self._frac(self.warn_above) if self.warn_above is not None else 9
+            for k, pix in enumerate(ticks):
+                kf = k / 10
+                lit = fv != fo and min(fo, fv) - 1e-9 <= kf <= max(fo, fv) + 1e-9
+                col = (KNOB_RED if kf > warn + 1e-9 else KNOB_AMBER) if lit else KNOB_UNLIT
+                for i, cv in pix:
+                    _over(buf, i, col, cv)
+            a, c = math.radians(225 - 270 * fv), self.S / 2
+            cx, cy = c + 16.4 * math.cos(a), c - 16.4 * math.sin(a)           # punctul-indicator crem
+            for rad, color, op in ((2.9, (14, 12, 11), 0.65), (2.0, KNOB_CREAM, 1.0)):
+                for y in range(int(cy - 5), int(cy + 6)):
+                    for x in range(int(cx - 5), int(cx + 6)):
+                        _over(buf, y * self.S + x, color, op * (rad + 0.5 - math.hypot(x + 0.5 - cx, y + 0.5 - cy)))
+            img = tk.PhotoImage(master=self, data=_png_b64(self.S, buf))
+            if len(self._cache) > 200:
+                self._cache.clear()
+            self._cache[key] = img
+        return img
+
+    def draw(self):
+        self.itemconfigure(self._item, image=self._image())
+        hot = self.warn_above is not None and self.value > self.warn_above
+        self.itemconfigure(self._txt, text=self.fmt(self.value), fill="#ff8a6e" if hot else "#f4e9c9")
+
+    def set(self, v):
+        """Doar afișează valoarea (nu cheamă `command`)."""
+        v = max(self.lo, min(self.hi, v))
+        if v != self.value:
+            self.value = v
+            self.draw()
+
+    def set_range(self, hi):
+        self.hi = hi
+        self.value = min(self.value, hi)
+        self.draw()
+
+    def _apply(self, v):
+        v = int(round(max(self.lo, min(self.hi, v)) / self.step) * self.step)
+        v = max(self.lo, min(self.hi, v))
+        if v != self.value:
+            self.value = v
+            self.draw()
+            self.command(v)
+
+    def _moved(self, e):
+        if self._drag:
+            y0, v0 = self._drag
+            self._apply(v0 + (y0 - e.y) * (self.hi - self.lo) / 120)       # 120 px de tras = tot intervalul
+
+    def _wheel(self, e):
+        up = e.num == 4 or (e.num != 5 and e.delta > 0)
+        self._apply(self.value + (self.wheel_step if up else -self.wheel_step))
+        return "break"
+
+
+class JumpDialog(tk.Frame):
+    """Salt rapid la canal (tasta J): căsuță așezată peste fereastra principală, în mijloc (în ecran complet = mijlocul ecranului).
+    E un cadru în aceeași fereastră, nu o fereastră separată: focusul nu depinde de managerul de ferestre.
+    Lista se filtrează la fiecare literă; ↑/↓ aleg, Enter redă, Esc închide. `host` = Main."""
+    ROWS, W = 8, 400
+
+    def __init__(self, host, items):
+        super().__init__(host.root, bg="#555555", padx=2, pady=2)
+        self.host, self.items, self.shown, self._closed = host, items, [], False
+        bg = host.bg_grey
+        body = tk.Frame(self, bg=bg, padx=10, pady=10)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text=host.t("jump_title"), font=host.f_bold, bg=bg, fg=TXT_DARK, anchor="w").pack(fill="x")
+        big = tkfont.Font(font=host.f_norm)
+        big.configure(size=-17)
+        self.var = tk.StringVar()
+        self.entry = tk.Entry(body, textvariable=self.var, font=big, bg="#ffffff", fg=TXT_DARK,
+                              insertbackground=TXT_DARK, relief="solid", bd=1)
+        self.entry.pack(fill="x", pady=(6, 6), ipady=3)
+        self.lb = tk.Listbox(body, height=self.ROWS, width=self.W // 8, font=host.f_norm, bg=bg, fg=TXT_DARK,
+                             activestyle="none", exportselection=False, highlightthickness=0, relief="flat",
+                             selectmode="browse", takefocus=0)
+        self.lb.pack(fill="both", expand=True)
+        self.status = tk.Label(body, font=host.f_hk, bg=bg, anchor="w")
+        self.status.pack(fill="x", pady=(6, 0))
+
+        self.var.trace_add("write", lambda *a: self.refresh())
+        self.entry.bind("<Up>", lambda e: self.move(-1))
+        self.entry.bind("<Down>", lambda e: self.move(1))
+        self.entry.bind("<Prior>", lambda e: self.move(-self.ROWS))
+        self.entry.bind("<Next>", lambda e: self.move(self.ROWS))
+        for k in ("<Return>", "<KP_Enter>"):
+            self.entry.bind(k, lambda e: self.choose())
+        self.entry.bind("<Escape>", lambda e: self.close() or "break")
+        self.lb.bind("<Button-1>", self._click)
+        self.lb.bind("<Double-Button-1>", lambda e: self.choose())
+        self.refresh()
+
+        self.place(relx=0.5, rely=0.5, anchor="center")
+        self.lift()
+        self.update_idletasks()
+        self.focus_entry()
+        self._tries = 0
+        self.after(40, self._watch)
+
+    def focus_entry(self):
+        try:
+            self.lift()
+            self.entry.focus_force()
+            self.entry.icursor("end")
+        except tk.TclError:
+            pass
+
+    def _watch(self):
+        """Dacă mpv ține încă focusul tastaturii, îl cerem înapoi de câteva ori (tastele oricum nu se pierd: vezi feed_key)."""
+        if self._closed or not self.winfo_exists():
+            return
+        self._tries += 1
+        try:
+            ok = self.focus_get() is self.entry
+        except KeyError:
+            ok = False
+        if not ok:
+            self.focus_entry()
+        if self._tries < 40:
+            self.after(60, self._watch)
+
+    def feed_key(self, k):
+        """Tasta a ajuns la mpv (nu la căsuță): o aplicăm aici, ca și cum ar fi fost tastată în câmp."""
+        e = self.entry
+        if len(k) == 1:
+            e.insert("insert", k)
+        elif k == "SPACE":
+            e.insert("insert", " ")
+        elif k == "BS":
+            i = e.index("insert")
+            if i:
+                e.delete(i - 1)
+        elif k in ("ENTER", "KP_ENTER"):
+            self.choose()
+        elif k == "ESC":
+            self.close()
+        elif k in ("UP", "DOWN"):
+            self.move(-1 if k == "UP" else 1)
+        elif k in ("PGUP", "PGDWN"):
+            self.move(-self.ROWS if k == "PGUP" else self.ROWS)
+
+    def refresh(self):
+        q = fold(self.var.get()).split()
+        full = " ".join(q)
+
+        def rank(it):
+            n = fold(it[0])
+            return 0 if n.startswith(full) else 1 if any(w.startswith(full) for w in n.split()) else 2
+        hits = [it for it in self.items if all(t in fold(it[0]) for t in q)]
+        hits.sort(key=rank) if q else None
+        self.shown = [n for n, _ in hits]
+        self.lb.delete(0, "end")
+        for _, label in hits:
+            self.lb.insert("end", label)
+        if hits:
+            self.lb.selection_set(0)
+            self.lb.activate(0)
+            self.status.configure(text="↑ ↓     Enter     Esc", fg="#666666")
+        else:
+            self.status.configure(text=self.host.t("jump_none"), fg="#dc2626")
+
+    def move(self, d):
+        if self.shown:
+            cur = self.lb.curselection()
+            i = max(0, min(len(self.shown) - 1, (cur[0] if cur else 0) + d))
+            self.lb.selection_clear(0, "end")
+            self.lb.selection_set(i)
+            self.lb.activate(i)
+            self.lb.see(i)
+        return "break"
+
+    def _click(self, e):
+        i = self.lb.nearest(e.y)
+        if 0 <= i < len(self.shown):
+            self.lb.selection_clear(0, "end")
+            self.lb.selection_set(i)
+        self.entry.focus_set()
+        return "break"
+
+    def choose(self):
+        cur = self.lb.curselection()
+        name = self.shown[cur[0]] if cur and cur[0] < len(self.shown) else None
+        self.close()
+        if name is not None:
+            self.host.root.after(20, lambda: self.host.try_tune(name))
+        return "break"
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        host = self.host
+        host.jump_win = None
+        if host.stream:
+            host.stream.capture_keys(False)
+        self.destroy()
+        host.root.focus_set()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3736,6 +4677,17 @@ class Main:
         self.rec_t0, self.muted = 0, bool(self.settings.get("muted", False))
         self.volume = max(0, min(int(self.settings.get("volume", 100)), VOL_MAX))
         self.adapter_items, self.tr = [], []
+        self._autoplay_done = False
+        self.info_mode, self._info_key, self._logo_tok, self._poster_tok = False, None, 0, 0
+        self._logo_img = self._poster_img = None
+        self._poster_raw = self._poster_link = None
+        self._poster_title = ""
+        self._poster_last_attempt = 0.0
+        self._poster_last_size = (0, 0)
+        self.media = MediaLookup(self.settings.get("tmdb_key", ""))
+        self.country_auto = str(self.settings.get("country_auto", "")).upper()
+        self.prev_channel, self.jump_win, self._tone_job = self.settings.get("prev_channel", ""), None, None
+        self.bass, self.treble = (self._tone_setting(k) for k in ("bass", "treble"))
         self.rec_dir = Path(self.settings.get("rec_dir") or REC_DIR)
         self.x11 = X11.create()
         self._stop_t, self._rec_osd_txt = 0.0, ""
@@ -3771,8 +4723,15 @@ class Main:
             for ch in letters:
                 root.bind(fmt.format(ch), fn)
         root.bind("<period>", self.on_key_dot)
+        for ch in "jJ":
+            root.bind(f"<Key-{ch}>", self.open_jump)           # salt rapid la canal
+        for ch in "mM":
+            root.bind(f"<Key-{ch}>", self.on_key_m)            # mute / unmute
+        root.bind("<Button-1>", self._click_away, add="+")
+        for ch in "hH":
+            root.bind(f"<Control-{ch}>", self.on_key_info)      # ascunde lista / arată logo + poster + difuzor     # click în afara căutării J o închide
+        root.bind("<BackSpace>", self.on_key_back)             # canalul anterior
         root.bind("<F11>", self.toggle_fullscreen)
-        root.bind("<Escape>", lambda e: self.fullscreen and self.toggle_fullscreen())
 
         base = tkfont.nametofont("TkDefaultFont")
 
@@ -3826,7 +4785,8 @@ class Main:
         top.pack(fill="x", pady=5)
         top.columnconfigure(0, weight=1)
         self.brand = ttk.Label(top, text=TITLE, style="Brand.TLabel", anchor="center")
-        self.chrome.bind_drag(self.brand)   # tragere = mută fereastra
+        self.chrome.bind_drag(self.brand, click=self.on_brand_click)   # tragere = mută fereastra; click = vedere „informații”
+        self.brand.configure(cursor="hand2")
         self.brand.grid(row=0, column=0, sticky="ew")
         self.rec_lbl = ttk.Label(main, style="Rec.TLabel", anchor="center")
         self.top = top
@@ -3867,6 +4827,19 @@ class Main:
         cb = ttk.Checkbutton(tc, variable=self.borderless_var, command=self.apply_borderless)
         cb.pack(fill="x", pady=(5, 0))
         self.tr.append((cb, "borderless"))
+        self.autoplay_var = tk.BooleanVar(value=bool(self.settings.get("autoplay_last", False)))
+        cb2 = ttk.Checkbutton(tc, variable=self.autoplay_var)
+        cb2.pack(fill="x", pady=(5, 0))
+        self.tr.append((cb2, "autoplay_last"))
+        self.fast_var = tk.BooleanVar(value=bool(self.settings.get("fast_switch", True)))
+        cb3 = ttk.Checkbutton(tc, variable=self.fast_var)
+        cb3.pack(fill="x", pady=(5, 0))
+        self.tr.append((cb3, "fast_switch"))
+        self.fast_tip = Tip(cb3, "", wrap=300)
+        self.show_media_var = tk.BooleanVar(value=bool(self.settings.get("show_media", True)))
+        cb4 = ttk.Checkbutton(tc, variable=self.show_media_var, command=self.on_toggle_media)
+        cb4.pack(fill="x", pady=(5, 0))
+        self.tr.append((cb4, "show_media"))
         self.progress_bar = ttk.Progressbar(tc, mode="indeterminate")
         self.cancel_btn = self._btn(tc, "scan_cancel", self.cancel_scan)
         self.cancel_btn.pack_forget()
@@ -3909,6 +4882,18 @@ class Main:
         for key in ("<Return>", "<KP_Enter>"):
             self.chlist.bind(key, self.on_list_enter)
         self.chlist.bind("<Button-3>", self.toggle_search)
+
+        # Vedere „informații” (Ctrl+H sau click pe titlu): logo-ul postului și posterul filmului.
+        inf = self.info_frame = tk.Frame(main, bg=bg_grey)
+        self.logo_cv = tk.Canvas(inf, height=96, bg=bg_grey, highlightthickness=0)
+        self.logo_cv.pack(side="top", fill="x", pady=(6, 0))
+        self.poster_cv = tk.Canvas(inf, height=120, bg=bg_grey, highlightthickness=0)
+        self.poster_cv.pack(side="top", fill="both", expand=True, pady=6)
+        self.poster_cv.bind("<Button-1>", self._poster_click)
+        self.poster_cv.bind("<Configure>", lambda e: self._later("_poster_job", self._rescale_poster))
+        self.logo_cv.bind("<Configure>", lambda e: self._later("_logo_job", self._draw_logo))
+        self._poster_job = self._logo_job = None
+        self.emboss_font = tkfont.Font(family="DejaVu Sans", size=-16, weight="bold")
         self.search.pack(fill="x", pady=5)
 
         self.bottom_sep = ttk.Separator(bottom, orient="horizontal")
@@ -3920,15 +4905,28 @@ class Main:
         self.about_btn = ttk.Button(bottom, image=self.info_img, compound="left", command=self.show_about)
         self.tr.append((self.about_btn, "about_btn"))
 
+        # Trei rotițe pe același rând: volum, joase, înalte (cu valoarea în mijloc și eticheta dedesubt)
         vol = self.vol_frame = ttk.Frame(bottom)
         vol.pack(fill="x", pady=5)
-        self.mute_lbl = ttk.Label(vol, cursor="hand2", font=self.f_norm)
-        self.mute_lbl.pack(side="left")
+        for col in range(3):
+            vol.columnconfigure(col, weight=1, uniform="knob")
+        common = dict(bg=bg_grey, font=self.f_hkb)
+        tone_fmt = lambda v: f"{v:+d}" if v else "0"
+        self.vol_knob = Knob(vol, lo=0, hi=VOL_MAX, value=self.volume, origin=0, step=1, wheel_step=VOL_WHEEL_STEP,
+                             default=100, fmt=lambda v: f"{v}%", command=self.on_volume, warn_above=100, **common)
+        self.bass_knob = Knob(vol, lo=-TONE_MAX, hi=TONE_MAX, value=self.bass, origin=0, step=1, wheel_step=1,
+                              default=0, fmt=tone_fmt, command=lambda v: self.on_tone("bass", v), **common)
+        self.treble_knob = Knob(vol, lo=-TONE_MAX, hi=TONE_MAX, value=self.treble, origin=0, step=1, wheel_step=1,
+                                default=0, fmt=tone_fmt, command=lambda v: self.on_tone("treble", v), **common)
+        for col, knob in enumerate((self.vol_knob, self.bass_knob, self.treble_knob)):
+            knob.grid(row=0, column=col, pady=(0, 2))
+        self.mute_lbl = ttk.Label(vol, cursor="hand2", font=self.f_norm, anchor="center")
+        self.mute_lbl.grid(row=1, column=0, sticky="ew")
         self.mute_lbl.bind("<Button-1>", self.toggle_mute)
-        self.vol_lbl = ttk.Label(vol, width=5, anchor="e", font=self.f_norm)
-        self.vol_lbl.pack(side="right")
-        self.vol_slider = ttk.Scale(vol, from_=0, to=VOL_MAX, orient="horizontal", command=self.on_volume)
-        self.vol_slider.pack(side="left", fill="x", expand=True, padx=6)
+        for col, key in ((1, "knob_bass"), (2, "knob_treble")):
+            lbl = ttk.Label(vol, font=self.f_norm, anchor="center")
+            lbl.grid(row=1, column=col, sticky="ew")
+            self.tr.append((lbl, key))
 
         # Butonul EPG ocupă toată lățimea (textul rămâne centrat ca la cele de jos); ⚙ e suprapus pe marginea dreaptă
         epg_row = ttk.Frame(bottom)
@@ -3992,7 +4990,8 @@ class Main:
     def set_settings_view(self, show):
         """Setările și (lista de canale + EPG + căutare) se exclud reciproc."""
         self.settings_on = show
-        for w in (self.tuner_container, self.about_btn, self.bottom_sep, self.epg_lbl, self.main_sep, self.list_frame, self.search):
+        for w in (self.tuner_container, self.about_btn, self.bottom_sep, self.epg_lbl, self.main_sep, self.list_frame,
+                  self.info_frame, self.search):
             w.pack_forget()
         if show:
             self.tuner_container.pack(fill="x")
@@ -4002,8 +5001,8 @@ class Main:
             self.bottom_sep.pack(fill="x", pady=(0, 5), before=self.vol_frame)
             self.epg_lbl.pack(fill="x", pady=5)
             self.main_sep.pack(fill="x", pady=(5, 0))
-            self.list_frame.pack(fill="both", expand=True, pady=5)
-            if self.search_wanted:
+            (self.info_frame if self.info_mode else self.list_frame).pack(fill="both", expand=True, pady=5)
+            if self.search_wanted and not self.info_mode:
                 self.search.pack(fill="x", pady=5, before=self.bottom_sep)
         self._min_h = 0
         self.root.after_idle(self.fit_min_height)
@@ -4042,8 +5041,10 @@ class Main:
     def _typing(self):
         """True cât se scrie într-un câmp de text (scurtăturile `.`, `f` și `i` trebuie ignorate)."""
         try:
+            if self.jump_win is not None and self.jump_win.winfo_exists():     # căutarea J deschisă: scurtăturile stau
+                return True
             return isinstance(self.root.focus_get(), (tk.Entry, ttk.Entry, ttk.Combobox))
-        except KeyError:
+        except (KeyError, tk.TclError):
             return False
 
     def on_key_dot(self, _=None):
@@ -4053,6 +5054,257 @@ class Main:
     def on_key_f(self, _=None):
         if not self._typing():
             self.toggle_fullscreen()
+
+    # ---------- vederea „informații”: logo + poster
+    def on_key_info(self, _=None):
+        if not self._typing():
+            self.toggle_info()
+
+    def on_brand_click(self):
+        # Titlul rămâne o scurtătură funcțională și când panoul de setări este deschis.
+        self.toggle_info()
+
+    def toggle_info(self, _=None):
+        # Vederea informații înlocuiește setările dacă acestea sunt deschise;
+        # astfel Ctrl+H / click pe titlu produce întotdeauna o schimbare vizibilă.
+        if self.settings_on:
+            self.info_mode = True
+            self.set_settings_view(False)
+        else:
+            self.info_mode = not self.info_mode
+            self.set_settings_view(False)
+        if self.info_mode:
+            self._info_key = None
+            self.root.after(60, lambda: self.refresh_info(True))
+
+    def on_toggle_media(self):
+        if not self.show_media_var.get():
+            self._logo_tok += 1
+            self._poster_tok += 1
+            self._logo_img = self._poster_img = self._poster_raw = self._poster_link = None
+            self._poster_last_size = (0, 0)
+            self._draw_logo()
+            self._draw_poster()
+        else:
+            self._info_key = None
+            self._poster_last_attempt = 0.0
+            if self.info_mode and not self.settings_on:
+                self.refresh_info(True)
+
+    def _later(self, attr, fn):
+        """Execută `fn` după o scurtă pauză de la ultimul eveniment de redimensionare (nu la fiecare pixel)."""
+        old = getattr(self, attr, None)
+        if old:
+            self.root.after_cancel(old)
+        setattr(self, attr, self.root.after(220, lambda: (setattr(self, attr, None), fn())))
+
+    def country(self):
+        """Țara pentru logo-uri: setarea „country”, apoi cea citită din semnal (TOT), apoi ultima cunoscută, apoi limba sistemului."""
+        man = str(self.settings.get("country", "")).strip().upper()
+        if len(man) == 2:
+            return man
+        c3 = getattr(self.stream.ts, "country3", None) if self.stream and self.stream.ts else None
+        if c3 in CC3:
+            self.country_auto = CC3[c3]
+        if self.country_auto:
+            return self.country_auto
+        loc = os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or ""
+        m = re.search(r"_([A-Z]{2})", loc)
+        if m and not loc.lower().startswith("en_"):
+            return m.group(1)
+        return "RO"
+
+    def _now_event(self):
+        ev, now = self.epg_events(), time.time()
+        return ev[0] if ev and ev[0][0] <= now else None
+
+    def refresh_info(self, force=False):
+        if not self.show_media_var.get():
+            return
+        chan = self.cur if self.stream else None
+        ev, cc = self._now_event(), self.country()
+        key = (chan, cc, ev[:3] if ev else None)
+        old, self._info_key = self._info_key, key
+        if key == old and not force:
+            retry_poster = (ev is not None and self._poster_img is None and
+                            time.time() - self._poster_last_attempt >= 90)
+            if retry_poster:
+                self._start_poster(ev)
+            return
+        channel_changed = old is None or old[0] != key[0]
+        country_changed = old is None or old[1] != key[1]
+        event_changed = old is None or old[2] != key[2]
+        if force or channel_changed or country_changed:
+            self._start_logo(chan, cc)
+        retry_poster = (ev is not None and self._poster_img is None and
+                        time.time() - self._poster_last_attempt >= 90)
+        if force or channel_changed or event_changed or retry_poster:
+            self._start_poster(ev)
+
+    def _cv_size(self, cv, dw, dh):
+        return max(cv.winfo_width(), 60) if cv.winfo_width() > 1 else dw, max(cv.winfo_height(), 40) if cv.winfo_height() > 1 else dh
+
+    def _start_logo(self, chan, cc):
+        self._logo_tok += 1
+        tok, self._logo_img = self._logo_tok, None
+        self._draw_logo()
+        if not self.show_media_var.get() or not chan:
+            return
+        w, h = self._cv_size(self.logo_cv, 260, 96)
+
+        def work():
+            png = image_to_png(self.media.logo_bytes(chan, cc), w - 40, h - 14)
+            self.events.put(lambda: self._logo_ready(tok, png))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _logo_ready(self, tok, png):
+        if tok != self._logo_tok or not png:
+            return
+        try:
+            w, h = self._cv_size(self.logo_cv, 260, 96)
+            self._logo_img = fit_photo(tk.PhotoImage(master=self.root, data=base64.b64encode(png)), w - 40, h - 14)
+        except tk.TclError:
+            return
+        self._draw_logo()
+
+    def _draw_logo(self):
+        cv = self.logo_cv
+        cv.delete("all")
+        if self.show_media_var.get() and self._logo_img is not None:            # fără logo încărcat nu se afișează nimic
+            w, h = self._cv_size(cv, 260, 96)
+            cv.create_image(w // 2, h // 2, image=self._logo_img)
+
+    def _start_poster(self, ev):
+        self._poster_tok += 1
+        tok = self._poster_tok
+        self._poster_img = self._poster_raw = self._poster_link = None
+        self._poster_last_size = (0, 0)
+        self._draw_poster()
+        if not self.show_media_var.get() or not ev:
+            self._poster_last_attempt = 0.0
+            return
+        title, text = ev[2], ev[3]
+        genre = self.epg_genre(ev)
+        if genre is None and NONMOVIE.search(fold(title)):
+            self._poster_last_attempt = time.time()
+            return
+        self._poster_last_attempt = time.time()
+        w, h = self._cv_size(self.poster_cv, 240, 300)
+
+        def work():
+            raw, link = self.media.poster(title, text, genre)
+            png = image_to_png(raw, w - 16, h - 12) if raw else None
+            self.events.put(lambda: self._poster_ready(tok, raw, png, link, (w, h)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def epg_genre(self, ev):
+        ts = self.stream.ts if self.stream else None
+        return ts.genre.get(ev[:3]) if ts else None
+
+    def _poster_ready(self, tok, raw, png, link, size=(0, 0)):
+        if tok != self._poster_tok:
+            return
+        self._poster_raw, self._poster_link = raw, link
+        self._poster_last_size = size
+        self._set_poster_png(png)
+
+    def _set_poster_png(self, png):
+        self._poster_img = None
+        if png:
+            try:
+                w, h = self._cv_size(self.poster_cv, 240, 300)
+                self._poster_img = fit_photo(tk.PhotoImage(master=self.root, data=base64.b64encode(png)), w - 16, h - 12)
+            except tk.TclError:
+                self._poster_img = None
+        self._draw_poster()
+
+    def _rescale_poster(self):
+        """Fereastra și-a schimbat dimensiunea: posterul se refă la mărimea nouă (evitând conversiile duplicate)."""
+        if not self.info_mode or not self.show_media_var.get():
+            return
+        if not self._poster_raw:
+            self._draw_poster()
+            return
+        w, h = self._cv_size(self.poster_cv, 240, 300)
+        if (w, h) == self._poster_last_size and self._poster_img is not None:
+            self._draw_poster()
+            return
+        tok, raw = self._poster_tok, self._poster_raw
+
+        def work():
+            png = image_to_png(raw, w - 16, h - 12)
+            self.events.put(lambda: tok == self._poster_tok and self._poster_ready(tok, raw, png, self._poster_link, (w, h)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _draw_poster(self):
+        cv = self.poster_cv
+        cv.delete("all")
+        if self.show_media_var.get() and self._poster_img is not None:          # fără poster încărcat nu se afișează nimic
+            w, h = self._cv_size(cv, 240, 300)
+            cv.create_image(w // 2, h // 2, image=self._poster_img)
+        cv.configure(cursor="hand2" if self.show_media_var.get() and self._poster_img is not None and self._poster_link else "arrow")
+
+    def _poster_click(self, _=None):
+        if self._poster_link and self._poster_img is not None:
+            try:
+                subprocess.Popen(["xdg-open", self._poster_link], env=get_clean_env(), stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError:
+                import webbrowser
+                webbrowser.open(self._poster_link)
+
+    def on_key_m(self, _=None):
+        if not self._typing():
+            self.toggle_mute()
+
+    def _click_away(self, e):
+        jw = self.jump_win
+        try:
+            if jw is None or not jw.winfo_exists():
+                return
+            w = e.widget
+            while isinstance(w, tk.Misc):
+                if w is jw:
+                    return
+                w = w.master
+        except tk.TclError:
+            return
+        jw.close()
+
+    def on_key_back(self, _=None):
+        if not self._typing():
+            self.go_prev()
+
+    def go_prev(self):
+        """Backspace: înapoi la canalul văzut înainte (apăsat din nou, revine la cel de acum)."""
+        known = {c for c, _ in self.tv_channels + self.radio_channels}
+        if self.scan_active:
+            return
+        if self.prev_channel in known and self.prev_channel != self.cur:
+            self.try_tune(self.prev_channel)
+        elif self.stream:
+            self.stream.toast(self.t("prev_none"), 2000)
+
+    def open_jump(self, _=None):
+        """Tasta J: căutare rapidă de canale în mijlocul ferestrei."""
+        if self._typing() or self.scan_active:
+            return
+        if self.jump_win and self.jump_win.winfo_exists():
+            self.jump_win.entry.focus_force()
+            return
+        seen, items = set(), []
+        radio = {c for c, _ in self.radio_channels}
+        names = [c for c, _ in self.tv_channels + self.radio_channels]
+        for c in [n for n in names if n in self.favorites] + names:      # favoritele întâi, ca în listă
+            if c in seen:
+                continue
+            seen.add(c)
+            star = "★  " if c in self.favorites else "    "
+            items.append((c, f"{star}{'📻' if c in radio else '📺'}  {c.strip()}{'   🔑' if c in self.locked else ''}"))
+        if items:
+            self.jump_win = JumpDialog(self, items)
+            if self.stream:
+                self.stream.capture_keys(True)
 
     def toggle_rec(self, _=None):
         if self.stream or self.rec_on:
@@ -4071,9 +5323,22 @@ class Main:
             self.on_close()
 
     def on_ui_msg(self, msg):
+        if self.jump_win is not None and msg != "quit-app":
+            jw = self.jump_win
+            try:
+                if jw.winfo_exists():       # tastele au ajuns la mpv în loc de căsuță: le scriem noi, fără alte comenzi
+                    if msg.startswith("key:"):
+                        jw.feed_key(msg[4:])      # Enter / Esc pot închide căsuța chiar aici
+                    if not jw._closed:
+                        jw.focus_entry()
+                    return
+            except tk.TclError:
+                pass
+        if msg.startswith("key:"):
+            return
         if msg == "toggle-ui":
             self.toggle_ui()
-        elif msg == "toggle-fs" or (msg == "exit-fs" and self.fullscreen):
+        elif msg == "toggle-fs":
             self.toggle_fullscreen()
         elif msg == "quit-app":
             self.on_close()
@@ -4081,6 +5346,14 @@ class Main:
             self.toggle_rec()
         elif msg == "show-epg":
             self.show_epg()
+        elif msg == "toggle-mute":
+            self.toggle_mute()
+        elif msg == "toggle-info":
+            self.toggle_info()
+        elif msg == "prev-channel":
+            self.go_prev()
+        elif msg == "jump-channel":
+            self.open_jump()
         elif msg in ("vol-up", "vol-down"):
             self.wheel_volume(VOL_WHEEL_STEP if msg == "vol-up" else -VOL_WHEEL_STEP)
 
@@ -4097,7 +5370,7 @@ class Main:
             return
         self.root.update_idletasks()
         need = self.main.winfo_reqheight()
-        if not self.settings_on:          # cu setările afișate lista e ascunsă
+        if not self.settings_on and not self.info_mode:          # cu setările / vederea „informații” lista e ascunsă
             need += LIST_MIN_H - self.list_frame.winfo_reqheight()
         if need != self._min_h:
             self._min_h = need
@@ -4106,13 +5379,21 @@ class Main:
             self.root.geometry(f"{self.root.winfo_width()}x{need}")
 
     def poll_events(self):
+        """Rulează evenimentele venite de la mpv. O eroare într-un eveniment nu mai oprește bucla (altfel moare tot
+        ce vine de la mpv: scurtături, volum pe rotița mouse-ului, mesaje)."""
         try:
             while True:
-                self.events.get_nowait()()
-        except queue.Empty:
-            pass
-        if not getattr(self, "_closing", False):
-            self.root.after(100, self.poll_events)
+                try:
+                    ev = self.events.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    ev()
+                except Exception:
+                    logging.getLogger("teleops").exception("eroare într-un eveniment mpv")
+        finally:
+            if not getattr(self, "_closing", False):
+                self.root.after(30, self.poll_events)
 
     def on_lang(self, _=None):
         self.lang = self.lang_box.get()
@@ -4127,10 +5408,12 @@ class Main:
         for w, key in self.tr:
             w.configure(text=self.t(key))
         self.rec_btn.configure(text=self.t("rec_on" if self.rec_on else "rec_off"))
+        self.show_mute(self.muted)
         if self.about_win and self.about_win.winfo_exists():      # textele ei nu se schimbă din mers: se închide
             self.about_win.destroy()
         self.refresh_tip.text = self.t("refresh_tip")
         self.cfg_tip.text = self.t("cfg_tip")
+        self.fast_tip.text = self.t("fast_tip")
         self._sync_stop_btn()
         self.update_video_msg()
         if self._ph_active:
@@ -4140,31 +5423,45 @@ class Main:
 
     def show_volume(self, v):
         self.volume = v
-        self.vol_lbl.configure(text=f"{v}%")
-        self.vol_slider.set(v)
+        self.vol_knob.set(v)
 
     def show_mute(self, m):
         self.muted = m
-        self.mute_lbl.configure(text="🔇" if m else "🔊")
+        self.mute_lbl.configure(text=f"{'🔇' if m else '🔊'} {self.t('osd_volume')}")
+
+    def _tone_setting(self, key):
+        try:
+            return max(-TONE_MAX, min(TONE_MAX, int(self.settings.get(key, 0))))
+        except (TypeError, ValueError):
+            return 0
+
+    def on_tone(self, which, v):
+        """Joase / înalte: mesaj imediat, filtrul audio se reface după 150 ms (nu la fiecare pas de tras)."""
+        setattr(self, which, v)
+        if self.stream:
+            self.stream.toast(f"{self.t('knob_' + which)}: {v:+d} dB", 2500)
+            if self._tone_job:
+                self.root.after_cancel(self._tone_job)
+            self._tone_job = self.root.after(150, self._apply_tone)
+
+    def _apply_tone(self):
+        self._tone_job = None
+        if self.stream:
+            self.stream.set_tone(self.bass, self.treble)
 
     def on_volume(self, val):
         v = round(float(val))
         if v != self.volume:
             self.volume = v
-            self.vol_lbl.configure(text=f"{v}%")
             if self.stream:
                 self.stream.set_prop("volume", v)
                 self.stream.toast(f"{self.t('osd_volume')}: {v}%", 3000)
 
     def wheel_volume(self, delta):
         """Rotița de mouse de pe video: același drum ca glisorul (eticheta, mpv, mesajul „Volum”)."""
-        try:
-            top = float(self.vol_slider.cget("to"))
-        except (tk.TclError, ValueError):
-            top = VOL_MAX
-        v = int(max(0, min(top, self.volume + delta)))
+        v = int(max(0, min(self.vol_knob.hi, self.volume + delta)))
         self.on_volume(v)
-        self.vol_slider.set(v)
+        self.vol_knob.set(v)
 
     def toggle_mute(self, _=None):
         self.show_mute(not self.muted)
@@ -4202,7 +5499,7 @@ class Main:
     def on_mpv_prop(self, name, v):
         if name == "volume": self.show_volume(round(v))
         elif name == "mute": self.show_mute(bool(v))
-        elif name == "volume-max": self.vol_slider.configure(to=v)
+        elif name == "volume-max": self.vol_knob.set_range(v)
         elif (name == "vo-configured" and v) or (name == "audio-params" and self.is_radio(self.cur)):
             if self.loading:           # a apărut imaginea (sau sunetul, la radio): dispare „Se încarcă...”
                 self.loading = False
@@ -4219,6 +5516,8 @@ class Main:
             self.search_var.set("")
 
     def toggle_search(self, _=None):
+        if self.info_mode:
+            return
         scroll_pos = self.chlist.yview()
         self.search_wanted = not self.search_wanted
         if not self.search_wanted:
@@ -4293,6 +5592,8 @@ class Main:
         self._sync_stop_btn()      # fără redare, butonul devine „Închide programul”
         self.brand.configure(text=self.cur.strip() if on and self.cur else TITLE)
         self.set_epg(self.epg_now_next() if on else "")
+        if self.info_mode and not self.settings_on:
+            self.refresh_info()
         if self.rec_on:
             txt = self._rec_txt()
             self.rec_lbl.configure(text=txt)
@@ -4378,6 +5679,12 @@ class Main:
             self.adapter.set(self.t("no_tuner"))
         self.update_scan_buttons()
         self.warm_async()
+        if not self._autoplay_done:
+            self._autoplay_done = True
+            names = {c for c, _ in self.tv_channels + self.radio_channels}
+            if (self.autoplay_var.get() and items and not self.stream and not self.scan_active
+                    and self.last_channel in names and self.last_channel not in self.locked):
+                self.tune(self.last_channel)        # dacă tunerul se încălzește încă, tune() așteaptă singur
 
     def warm_async(self):
         ad = self.adapter_data()
@@ -4598,9 +5905,11 @@ class Main:
             self.set_loading(name)
             self.root.after(200, lambda: self.tune(name, retry, wait + 1))
             return
-        self.stop()
+        if self.cur and self.cur != name:
+            self.prev_channel = self.cur          # pentru Backspace
+        self.stop(fast=True)                  # mpv-ul vechi se închide în fundal
         self.set_loading(name)
-        time.sleep(0.15)
+        time.sleep(0.05)
         self._retry = retry                    # NU mai tăiem spațiile: numele trebuie să fie exact ca în channels.conf
         try:
             if not self.adapter_data():
@@ -4611,7 +5920,8 @@ class Main:
                                    lambda k, v: self.events.put(lambda: self.on_mpv_prop(k, v)),
                                    get_lang_func=lambda: self.lang,
                                    wid=self.video.winfo_id(),
-                                   on_msg=lambda m: self.events.put(lambda: self.on_ui_msg(m)))
+                                   on_msg=lambda m: self.events.put(lambda: self.on_ui_msg(m)),
+                                   tone=(self.bass, self.treble), fast=bool(self.fast_var.get()))
             self.cur = self.last_channel = name
             self.select_current()
         except Exception as e:
@@ -4619,10 +5929,10 @@ class Main:
             self.update_video_msg()
             messagebox.showerror(self.t("play_err"), str(e), parent=self.root)
 
-    def stop(self):
+    def stop(self, fast=False):
         self.set_recording(False)
         if self.stream:
-            self.stream.stop()
+            self.stream.stop(background=fast)
         self.stream = self.cur = None
         self.loading = False
         self.update_video_msg()
@@ -4795,10 +6105,19 @@ class Main:
             "muted": self.muted,
             "volume": self.volume,
             "last_channel": self.cur or self.last_channel,
+            "prev_channel": self.prev_channel,
+            "bass": self.bass,
+            "treble": self.treble,
             "search_visible": self.search_wanted,
             "geometry": self._pre_fs_geom if self.fullscreen and self._pre_fs_geom else self.root.geometry(),
             "video_side": self.video_side,
             "borderless": bool(self.borderless_var.get()),
+            "autoplay_last": bool(self.autoplay_var.get()),
+            "tmdb_key": self.settings.get("tmdb_key", ""),
+            "country": self.settings.get("country", ""),
+            "country_auto": self.country_auto,
+            "fast_switch": bool(self.fast_var.get()),
+            "show_media": bool(self.show_media_var.get()),
             "adapter": self.adapter_data() or self.settings.get("adapter", ""),
             "tuner_visible": self.settings_on,
             "scroll_position": self.settings.get("scroll_position", 0.0) if filtered else self.chlist.yview()[0],
