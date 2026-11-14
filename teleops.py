@@ -110,7 +110,7 @@ from tkinter import filedialog, messagebox, ttk
 # ──────────────────────────────────────────────────────────────────────────────
 
 TITLE = "Teleops DVB"
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 WM_NAME, WM_CLASS = "teleops", "Teleops"   # WM_CLASS al ferestrei: GNOME/KDE îl potrivesc cu fișierul .desktop (iconiță în bara de activități)
 CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
@@ -346,6 +346,29 @@ T = {  # cheie: (ro, en, it)
         "Un player TV/radio DVB (TV Tuner Player) realizzato con Python Tk, con EPG, sottotitoli DVB e registrazioni programmate. "
         "Usa dvbv5-scan, dvbv5-zap e dvb-fe-tool del pacchetto dvb-tools per la scansione dei canali e la ricezione, "
         "e mpv per la riproduzione video e audio."),
+    "about_tab_prog": ("Despre program", "About", "Informazioni"),
+    "about_tab_keys": ("Comenzi rapide", "Hotkeys", "Scorciatoie"),
+    "about_version": ("Versiunea {v}", "Version {v}", "Versione {v}"),
+    "about_services": ("Serviciile online folosite:", "Online services used:", "Servizi online utilizzati:"),
+    "about_services_list": (
+        "• iptv-org (iptv-org.github.io): baza de canale și logo-uri\n"
+        "• Wikimedia Commons, Imgur ș.a.: găzduirea imaginilor de logo indicate de iptv-org\n"
+        "• IMDb: postere filme și seriale\n"
+        "• Apple iTunes Search: postere filme și seriale\n"
+        "• TVmaze: afișe seriale și emisiuni\n"
+        "• TMDB (opțional, cu cheie proprie): postere, în limba țării alese",
+        "• iptv-org (iptv-org.github.io): channel and logo database\n"
+        "• Wikimedia Commons, Imgur etc.: hosting of the logo images listed by iptv-org\n"
+        "• IMDb: movie and series posters\n"
+        "• Apple iTunes Search: movie and series posters\n"
+        "• TVmaze: series and show artwork\n"
+        "• TMDB (optional, with your own key): posters, in the chosen country's language",
+        "• iptv-org (iptv-org.github.io): database di canali e logo\n"
+        "• Wikimedia Commons, Imgur ecc.: hosting dei loghi indicati da iptv-org\n"
+        "• IMDb: locandine di film e serie\n"
+        "• Apple iTunes Search: locandine di film e serie\n"
+        "• TVmaze: immagini di serie e programmi\n"
+        "• TMDB (facoltativo, con chiave propria): locandine, nella lingua del paese scelto"),
     "about_dev": (
         "Dezvoltat de Valentin Iacob, turock_valentin@gmail.com",
         "Developed by Valentin Iacob, turock_valentin@gmail.com",
@@ -369,6 +392,32 @@ T = {  # cheie: (ro, en, it)
     "scrambled": ("Canal codat (criptat): nu poate fi redat fără card/CAM.", "Scrambled (encrypted) channel: it can't be played without a card/CAM.", "Canale criptato: non riproducibile senza card/CAM."),
     "chlist_btn": ("📺 Lista Canale TV", "📺 TV Channel List", "📺 Elenco canali TV"),
     "cfg_tip": ("Setări / Listă canale", "Settings / Channel list", "Impostazioni / Elenco canali"),
+    "country_label": ("Țara (logo și poster)", "Country (logo & poster)", "Paese (logo e poster)"),
+    "country_auto": ("Automat", "Automatic", "Automatico"),
+    "country_tip": ("Țara al cărei conținut e căutat primul pentru logo-uri și postere (limba titlurilor, magazinul de filme, \n"
+                    "programul TV). „Automat” = țara citită din semnal (TOT) sau din sistem.",
+                    "Country searched first for logos and posters (title language, movie store, TV schedule). \n"
+                    "“Automatic” = country read from the signal (TOT) or the system.",
+                    "Paese cercato per primo per logo e poster (lingua dei titoli, store dei film, palinsesto TV). \n"
+                    "«Automatico» = paese letto dal segnale (TOT) o dal sistema."),
+    "news_lines": ("BREAKING NEWS\nTotul va fi bine!",
+                   "BREAKING NEWS\nEverything will be fine!",
+                   "ULTIM'ORA\nAndrà tutto bene!"),
+    "reset_btn": ("🧹 Resetare program", "🧹 Reset program", "🧹 Ripristina programma"),
+    "reset_tip": ("Șterge tot ce a salvat programul: lista de canale, setările, configurația MPV, programările, cache-ul și "
+                  "jurnalele. Programul revine la starea de după instalare și se închide. Înregistrările video NU se șterg.",
+                  "Deletes everything the program saved: channel list, settings, MPV configuration, schedules, cache and "
+                  "logs. The program returns to its freshly installed state and closes. Video recordings are NOT deleted.",
+                  "Elimina tutto ciò che il programma ha salvato: elenco canali, impostazioni, configurazione MPV, "
+                  "programmazioni, cache e log. Il programma torna allo stato iniziale e si chiude. Le registrazioni NON vengono eliminate."),
+    "reset_confirm": ("Sigur vrei să resetezi programul?\n\nSe șterg lista de canale, setările, configurația MPV, "
+                      "programările, cache-ul și jurnalele. Înregistrările video rămân.\nProgramul se va închide.",
+                      "Are you sure you want to reset the program?\n\nThe channel list, settings, MPV configuration, "
+                      "schedules, cache and logs will be deleted. Video recordings are kept.\nThe program will close.",
+                      "Vuoi davvero ripristinare il programma?\n\nVerranno eliminati elenco canali, impostazioni, configurazione MPV, "
+                      "programmazioni, cache e log. Le registrazioni restano.\nIl programma si chiuderà."),
+    "reset_done": ("Resetare finalizată. Pornește din nou programul.", "Reset finished. Start the program again.",
+                   "Ripristino completato. Avvia di nuovo il programma."),
     "ca_btn": ("🔑 Detectează canalele codate", "🔑 Detect scrambled channels", "🔑 Rileva canali criptati"),
     "ca_done": ("Detecție finalizată! Canale codate:", "Detection finished! Scrambled channels:", "Rilevamento completato! Canali criptati:"),
     "already": ("Teleops DVB rulează deja.", "Teleops DVB is already running.", "Teleops DVB è già in esecuzione."),
@@ -3814,34 +3863,61 @@ def make_info_icon(size=14, color=(30, 120, 210)):
 
 
 class AboutDialog(tk.Toplevel):
-    """`host` = fereastra principală; folosim: root, t(), f_hk, f_hkb. Dimensiunea o dă conținutul; nu se redimensionează."""
+    """`host` = fereastra principală; folosim: root, t(), about_btn, bg_grey. Două taburi: „Despre program” și
+    „Comenzi rapide”. Dimensiunea o dă conținutul; nu se redimensionează."""
 
     def __init__(self, host):
         super().__init__(host.root)
         self.title(host.t("about_btn"))
         self.transient(host.root)
         self.resizable(False, False)
-        outer = ttk.Frame(self, padding=12)
+        outer = ttk.Frame(self, padding=10)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text=host.t("about_title").format(v=VERSION), style="HkB.TLabel", anchor="w").pack(fill="x", pady=(0, 6))
+        nb = ttk.Notebook(outer)
+        nb.pack(fill="both", expand=True)
+
+        # --- Tab 1: Despre program (conținutul e centrat pe verticală în casetă)
+        t1 = ttk.Frame(nb, padding=(16, 8))
+        nb.add(t1, text=host.t("about_tab_prog"))
+        t1.columnconfigure(0, weight=1)
+        t1.rowconfigure(0, weight=1)
+        t1.rowconfigure(2, weight=1)
+        mid = ttk.Frame(t1)
+        mid.grid(row=1, column=0)
+        self._embossed(mid, TITLE, host.bg_grey).pack(pady=(0, 2))
+        ttk.Label(mid, text=host.t("about_version").format(v=VERSION), style="Hk.TLabel", anchor="center").pack(pady=(0, 10))
         for key in ("about_desc", "about_dev"):
-            ttk.Label(outer, text=host.t(key), style="Hk.TLabel", wraplength=520, justify="left").pack(fill="x", pady=(0, 6))
-        ttk.Separator(outer, orient="horizontal").pack(fill="x", pady=(2, 8))
-        hk = ttk.Frame(outer)
-        hk.pack(fill="x")
+            ttk.Label(mid, text=host.t(key), style="Hk.TLabel", wraplength=430, justify="center",
+                      anchor="center").pack(pady=(0, 6))
+        ttk.Separator(mid, orient="horizontal").pack(fill="x", pady=(6, 8))
+        ttk.Label(mid, text=host.t("about_services"), style="HkB.TLabel", anchor="w").pack(fill="x", pady=(0, 4))
+        ttk.Label(mid, text=host.t("about_services_list"), style="Hk.TLabel", wraplength=430, justify="left",
+                  anchor="w").pack(fill="x")
+
+        # --- Tab 2: Comenzi rapide (același format ca înainte)
+        t2 = ttk.Frame(nb, padding=(12, 10))
+        nb.add(t2, text=host.t("about_tab_keys"))
         # Două jumătăți egale, fără separator vizibil: descrierile se aliniază spre centru,
         # iar combinațiile de taste pornesc din centru spre dreapta.
-        hk.columnconfigure(0, weight=1, uniform="hotkeys")
-        hk.columnconfigure(1, weight=1, uniform="hotkeys")
-        ttk.Label(hk, text=host.t("hk_title"), style="HkB.TLabel").grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        for r, (d, k) in enumerate(HOTKEYS, 1):
-            ttk.Label(hk, text=host.t(d), style="Hk.TLabel", wraplength=300, justify="right", anchor="e").grid(
+        t2.columnconfigure(0, weight=1, uniform="hotkeys")
+        t2.columnconfigure(1, weight=1, uniform="hotkeys")
+        for r, (d, k) in enumerate(HOTKEYS):
+            ttk.Label(t2, text=host.t(d), style="Hk.TLabel", wraplength=260, justify="right", anchor="e").grid(
                 row=r, column=0, sticky="e", padx=(0, 12), pady=2)
-            ttk.Label(hk, text=host.t(k), style="HkB.TLabel", wraplength=280, justify="left", anchor="w").grid(
+            ttk.Label(t2, text=host.t(k), style="HkB.TLabel", wraplength=240, justify="left", anchor="w").grid(
                 row=r, column=1, sticky="w", padx=(12, 0), pady=2)
-        # Buton lat, pe toată lățimea ferestrei, în continuitate cu butoanele panoului.
-        ttk.Button(outer, text=host.t("about_close"), command=self.destroy).pack(fill="x", pady=(12, 0))
+
+        # Buton cu aceeași lățime și înălțime ca „Despre” din panou, centrat.
+        try:
+            bw, bh = host.about_btn.winfo_width(), host.about_btn.winfo_reqheight()
+        except tk.TclError:
+            bw = bh = 0
+        if bw < 40:
+            bw = PANEL_W - 28
+        box = ttk.Frame(outer, width=bw, height=max(bh, 24))
+        box.pack(pady=(10, 0))
+        box.pack_propagate(False)
+        ttk.Button(box, text=host.t("about_close"), command=self.destroy).pack(fill="both", expand=True)
         self.bind("<Escape>", lambda e: self.destroy())
         self.update_idletasks()
         w, h = self.winfo_reqwidth(), self.winfo_reqheight()
@@ -3853,6 +3929,18 @@ class AboutDialog(tk.Toplevel):
         self.minsize(w, h)
         self.maxsize(w, h)
 
+    @staticmethod
+    def _embossed(parent, text, bg):
+        """Titlu în relief (letterpress): strat alb jos-dreapta, umbră discretă, apoi fața textului; font cu serife."""
+        f = tkfont.Font(family="DejaVu Serif", size=-38, weight="bold")
+        w, h = f.measure(text) + 12, f.metrics("linespace") + 10
+        cv = tk.Canvas(parent, width=w, height=h, bg=bg, highlightthickness=0)
+        cx, cy = w // 2 - 1, h // 2 - 1
+        for dx, dy, col in ((2, 2, "#ffffff"), (1, 1, "#ffffff"), (-1, -1, "#9a9a9a"), (0, 0, "#4f4f4f")):
+            cv.create_text(cx + dx, cy + dy, text=text, font=f, fill=col)
+        return cv
+
+
 def fold(s):
     """Text fără diacritice și majuscule (căutarea găsește «Pro TV» și cu «pro tv», «Știri» cu «stiri»)."""
     return "".join(c for c in unicodedata.normalize("NFD", s.casefold()) if not unicodedata.combining(c))
@@ -3863,6 +3951,7 @@ def fold(s):
 # SECȚIUNE media  ·  Logo-uri de posturi, postere de filme (cu link IMDb), grila de difuzor retro
 # ──────────────────────────────────────────────────────────────────────────────
 CACHE_DIR = CONF_DIR / "cache"
+LOGO_TTL = 30 * 86400      # logo-urile (și indexul de canale) se reactualizează la 30 de zile
 IPTV_CHANNELS = "https://iptv-org.github.io/api/channels.json"      # baza de date deschisă iptv-org (canale + țară)
 IPTV_LOGOS = "https://iptv-org.github.io/api/logos.json"
 CC3 = {"ROU": "RO", "MDA": "MD", "ITA": "IT", "GBR": "GB", "DEU": "DE", "FRA": "FR", "ESP": "ES", "PRT": "PT", "HUN": "HU",
@@ -3870,12 +3959,27 @@ CC3 = {"ROU": "RO", "MDA": "MD", "ITA": "IT", "GBR": "GB", "DEU": "DE", "FRA": "
        "BEL": "BE", "NLD": "NL", "DNK": "DK", "SWE": "SE", "NOR": "NO", "FIN": "FI", "GRC": "GR", "TUR": "TR", "UKR": "UA",
        "IRL": "IE", "LUX": "LU", "ALB": "AL", "MKD": "MK", "BIH": "BA", "MNE": "ME", "LTU": "LT", "LVA": "LV", "EST": "EE",
        "CYP": "CY", "MLT": "MT", "ISL": "IS", "USA": "US", "CAN": "CA", "AUS": "AU", "BRA": "BR"}
+COUNTRY_NAMES = {"RO": "România", "MD": "Moldova", "IT": "Italia", "GB": "United Kingdom", "DE": "Deutschland", "FR": "France",
+                 "ES": "España", "PT": "Portugal", "HU": "Magyarország", "BG": "България", "RS": "Srbija", "HR": "Hrvatska",
+                 "SI": "Slovenija", "SK": "Slovensko", "CZ": "Česko", "PL": "Polska", "AT": "Österreich", "CH": "Schweiz",
+                 "BE": "België", "NL": "Nederland", "DK": "Danmark", "SE": "Sverige", "NO": "Norge", "FI": "Suomi",
+                 "GR": "Ελλάδα", "TR": "Türkiye", "UA": "Україна", "IE": "Ireland", "US": "United States", "CA": "Canada",
+                 "AU": "Australia", "BR": "Brasil"}
+TMDB_LANG = {"RO": "ro-RO", "MD": "ro-RO", "IT": "it-IT", "GB": "en-GB", "DE": "de-DE", "FR": "fr-FR", "ES": "es-ES",
+             "PT": "pt-PT", "HU": "hu-HU", "BG": "bg-BG", "RS": "sr-RS", "HR": "hr-HR", "SI": "sl-SI", "SK": "sk-SK",
+             "CZ": "cs-CZ", "PL": "pl-PL", "AT": "de-AT", "CH": "de-CH", "BE": "nl-BE", "NL": "nl-NL", "DK": "da-DK",
+             "SE": "sv-SE", "NO": "nb-NO", "FI": "fi-FI", "GR": "el-GR", "TR": "tr-TR", "UA": "uk-UA", "IE": "en-IE",
+             "US": "en-US", "CA": "en-CA", "AU": "en-AU", "BR": "pt-BR"}
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+NEWS = re.compile(r"\b(stiri(le|lor)?|stire(a)?|news|notizie|telegiornale)\b")        # emisiuni de știri: în loc de poster se desenează un afiș
 NONMOVIE = re.compile(r"\b(stiri|jurnal|telejurnal|meteo|buletin|reclam\w*|teleshopping|sport\w*|emisiune|talk|magazin|concert|muzic\w*|dezbatere|news)\b")
 
 
 def mlog(msg, *args):
-    """Jurnal pentru logo/poster: ~/.config/TeleopsDVB/media.log (mic, se rotește). Util dacă nu apar imaginile."""
+    """Jurnal pentru logo/poster, doar pentru depanare: se scrie în ~/.config/TeleopsDVB/media.log numai dacă
+    programul e pornit cu variabila TELEOPS_DEBUG=1. Altfel nu scrie nimic pe disc."""
+    if not os.environ.get("TELEOPS_DEBUG"):
+        return
     lg = logging.getLogger("teleops.media")
     if not lg.handlers:
         lg.setLevel(logging.INFO)
@@ -3916,11 +4020,11 @@ def _ssl_context():
     return _SSL_CTX[0]
 
 
-def http_get(url, timeout=12, limit=80_000_000):
+def http_get(url, timeout=12, limit=80_000_000, headers=None):
     """Descarcă un URL; face fallback SSL la erori de certificat și întoarce None la alte erori."""
     import ssl
     req = urllib.request.Request(url, headers={"User-Agent": f"Mozilla/5.0 TeleopsDVB/{VERSION}", "Accept-Encoding": "gzip",
-                                               "Accept": "*/*"})
+                                               "Accept": "*/*", **(headers or {})})
     for ctx in (_ssl_context(), ssl._create_unverified_context()):
         try:
             with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
@@ -4045,7 +4149,35 @@ class MediaLookup:
     """Logo-urile (iptv-org, după țară) și posterele (IMDb / Apple / TVmaze / opțional TMDB) se caută în fire separate
     și se țin în ~/.config/TeleopsDVB/cache, ca fiecare lucru să se descarce o singură dată."""
 
+    @staticmethod
+    def cleanup_cache():
+        """La pornire: logo-urile mai vechi de 30 de zile se șterg (se descarcă din nou la nevoie), intrările vechi din
+        posters.json la fel, iar fișierele de jurnal rămase de la versiuni vechi dispar. O singură dată se șterg și
+        imaginile vechi din cache (înainte aici se salvau și posterele)."""
+        now = time.time()
+        try:
+            marker = CACHE_DIR / ".v2"
+            purge_all = CACHE_DIR.is_dir() and not marker.exists()
+            if CACHE_DIR.is_dir():
+                for f in CACHE_DIR.glob("img_*.bin"):
+                    try:
+                        if purge_all or now - f.stat().st_mtime > LOGO_TTL:
+                            f.unlink()
+                    except OSError:
+                        pass
+                if purge_all:
+                    marker.write_text("2")
+        except OSError:
+            pass
+        if not os.environ.get("TELEOPS_DEBUG"):
+            for name in ("media.log", "media.log.1"):
+                try:
+                    (CONF_DIR / name).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
     def __init__(self, tmdb_key=""):
+        self.cleanup_cache()
         self.lock, self.tmdb_key = threading.Lock(), (tmdb_key or "").strip()
         self.logos, self.logos_fail, self.glob = {}, {}, None
         self._logo_miss = {}
@@ -4053,23 +4185,30 @@ class MediaLookup:
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             self.posters = json.loads((CACHE_DIR / "posters.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
+            self.posters = {k: v for k, v in self.posters.items()
+                            if isinstance(v, dict) and time.time() - v.get("ts", 0) < LOGO_TTL}
+        except (OSError, ValueError, AttributeError):
+            self.posters = {}
 
     # ---- imagini
-    def fetch_image(self, url):
+    def fetch_image(self, url, keep=True):
+        """Descarcă o imagine. `keep=True` (logo-uri): se ține pe disc 30 de zile; `keep=False` (postere): doar în memorie,
+        deci nu rămâne nimic pe disc după ce se termină filmul."""
         f = CACHE_DIR / ("img_" + hashlib.sha1(url.encode()).hexdigest()[:16] + ".bin")
-        try:
-            if f.exists():
-                return f.read_bytes()
-        except OSError:
-            pass
-        data = http_get(url, 15, 15_000_000)
-        if data and len(data) > 200:
+        if keep:
             try:
-                f.write_bytes(data)
+                if f.exists() and time.time() - f.stat().st_mtime < LOGO_TTL:
+                    return f.read_bytes()
             except OSError:
                 pass
+        data = http_get(url, 15, 15_000_000)
+        if data and len(data) > 200:
+            if keep:
+                try:
+                    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                    f.write_bytes(data)
+                except OSError:
+                    pass
             return data
         return None
 
@@ -4205,21 +4344,57 @@ class MediaLookup:
         except (ValueError, AttributeError, TypeError):
             return None
         qn = norm_name(q)
+        mlog("IMDb '%s': %s", q, [(d.get("l"), d.get("y"), d.get("qid")) for d in res[:4]])
         for i, d in enumerate(res):
             r = difflib.SequenceMatcher(None, qn, norm_name(d.get("l", ""))).ratio()
-            if r >= 0.76 or (year and d.get("y") == year and r >= 0.48) or (genre == 1 and i == 0 and r >= 0.45):
+            dy = d.get("y")
+            # Titlul din EPG e adesea cel tradus (ex. «Triplu X» = «xXx»): IMDb îl găsește după titlurile alternative,
+            # dar în răspuns apare titlul original, deci la filme primul rezultat se acceptă și fără asemănare de nume.
+            year_ok = not (year and dy) or abs(dy - year) <= 1
+            movie_top = (genre == 1 and i < 3 and d.get("qid") in ("movie", "tvMovie") and year_ok
+                         and (i == 0 or (year and dy == year)))
+            if r >= 0.76 or (year and dy == year and r >= 0.48) or (genre == 1 and i == 0 and r >= 0.45) or movie_top:
                 img = (d.get("i") or {}).get("imageUrl")
                 if img:
                     img = re.sub(r"\._V1_.*(\.\w+)$", r"._V1_UY540_\1", img)
                     return {"imdb": f"https://www.imdb.com/title/{d['id']}/", "img": img, "source": "IMDb"}
         return None
 
-    def _apple(self, q, year, genre):
-        """Caută postere în catalogul Apple/iTunes Search API (întâi RO, apoi US dacă nu găsește)."""
+    def _imdb_find(self, q, year, genre):
+        """Căutarea de pe site-ul IMDb (aceeași ca în browser, găsește și titlurile traduse). Doar pentru filme."""
+        if genre not in (None, 1):
+            return None
+        raw = http_get("https://www.imdb.com/find/?s=tt&ttype=ft&q=" + urllib.parse.quote(q), 12,
+                       headers={"Accept": "text/html", "Accept-Language": "ro,en;q=0.8"})
+        m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', (raw or b"").decode("utf-8", "ignore"), re.S)
+        if not m:
+            mlog("IMDb find '%s': fără date (pagina blocată sau schimbată)", q)
+            return None
+        try:
+            res = json.loads(m.group(1))["props"]["pageProps"]["titleResults"]["results"]
+        except (ValueError, KeyError, TypeError):
+            return None
+        for i, it in enumerate(res[:3]):
+            it = it.get("listItem") or it
+            tid = it.get("id") or it.get("titleId") or ""
+            img = ((it.get("titlePosterImageModel") or it.get("primaryImage") or {}).get("url") or "")
+            ry = it.get("titleReleaseText") or it.get("releaseYear") or ""
+            try:
+                dy = int(re.search(r"\d{4}", str(ry)).group(0))
+            except (AttributeError, ValueError):
+                dy = None
+            mlog("IMDb find '%s': #%d %s %s %s", q, i, tid, it.get("titleNameText") or it.get("titleText"), ry)
+            if tid.startswith("tt") and img and (not (year and dy) or abs(dy - year) <= 1):
+                img = re.sub(r"\._V1_.*(\.\w+)$", r"._V1_UY540_\1", img)
+                return {"imdb": f"https://www.imdb.com/title/{tid}/", "img": img, "source": "IMDb-find"}
+        return None
+
+    def _apple(self, q, year, genre, cc="RO"):
+        """Caută postere în catalogul Apple/iTunes Search API (întâi magazinul țării alese, apoi US dacă nu găsește)."""
         media = "movie" if genre in (None, 1) else "tvShow"
         entity = "movie" if media == "movie" else "tvSeason"
         qn = norm_name(q)
-        for store in ("ro", "us"):
+        for store in dict.fromkeys((cc.lower(), "us")):
             params = urllib.parse.urlencode({"term": q, "media": media, "entity": entity, "country": store, "limit": 25})
             raw = http_get("https://itunes.apple.com/search?" + params, 10)
             if not raw:
@@ -4228,6 +4403,7 @@ class MediaLookup:
                 res = json.loads(raw).get("results", [])
             except (ValueError, AttributeError, TypeError):
                 continue
+            mlog("Apple-%s '%s': %s", store.upper(), q, [r.get("trackName") or r.get("collectionName") for r in res[:3]])
             for i, r in enumerate(res):
                 name = r.get("trackName") or r.get("collectionName") or ""
                 sim = difflib.SequenceMatcher(None, qn, norm_name(name)).ratio()
@@ -4261,10 +4437,10 @@ class MediaLookup:
                     return {"imdb": show.get("url"), "img": url, "source": "TVmaze"}
         return None
 
-    def _tmdb(self, q, year, genre):
+    def _tmdb(self, q, year, genre, cc="RO"):
         k = urllib.parse.quote(self.tmdb_key)
         raw = http_get(
-            f"https://api.themoviedb.org/3/search/multi?api_key={k}&language=ro-RO&include_adult=false&query={urllib.parse.quote(q)}",
+            f"https://api.themoviedb.org/3/search/multi?api_key={k}&language={TMDB_LANG.get(cc, 'en-US')}&include_adult=false&query={urllib.parse.quote(q)}",
             10
         )
         if not raw:
@@ -4291,26 +4467,28 @@ class MediaLookup:
                 }
         return None
 
-    def poster(self, title, text, genre):
-        """(octeți imagine | None, link IMDb | None). Caută titlul curățat și variantele sale."""
+    def poster(self, title, text, genre, cc="RO"):
+        """(octeți imagine | None, link IMDb | None). Caută titlul curățat și variantele sale; `cc` = țara prioritară."""
         q = clean_title(title)
         if len(q) < 3:
             return None, None
         m = re.search(r"\b(19[2-9]\d|20[0-3]\d)\b", title + " " + (text or "")[:300])
         year = int(m.group(1)) if m else None
-        key = norm_name(q) + "|" + str(year or "")
+        key = norm_name(q) + "|" + str(year or "") + "|" + cc
         hit = self.posters.get(key)
         if not hit or (not hit.get("img") and time.time() - hit.get("ts", 0) > 90):
             found = None
             for cand_q in _title_queries(q):
                 if self.tmdb_key:
-                    found = self._tmdb(cand_q, year, genre)
+                    found = self._tmdb(cand_q, year, genre, cc)
                 if not (found and found.get("img")):
-                    found = self._apple(cand_q, year, genre)
+                    found = self._apple(cand_q, year, genre, cc)
                 if not (found and found.get("img")):
                     found = self._imdb(cand_q, year, genre)
                 if not (found and found.get("img")):
                     found = self._tvmaze(cand_q, year)
+                if not (found and found.get("img")):
+                    found = self._imdb_find(cand_q, year, genre)
                 if found and found.get("img"):
                     break
             hit = found or {}
@@ -4324,7 +4502,7 @@ class MediaLookup:
             "https://www.imdb.com/find/?s=tt&q=" + urllib.parse.quote(q)
             if hit is not None and genre in (None, 1) else None
         )
-        img_bytes = self.fetch_image(hit["img"]) if hit.get("img") else None
+        img_bytes = self.fetch_image(hit["img"], keep=False) if hit.get("img") else None
         if hit.get("img") and not img_bytes:
             hit["img"] = None
             hit["ts"] = 0
@@ -4682,6 +4860,7 @@ class Main:
         self._logo_img = self._poster_img = None
         self._poster_raw = self._poster_link = None
         self._poster_title = ""
+        self._news = False
         self._poster_last_attempt = 0.0
         self._poster_last_size = (0, 0)
         self.media = MediaLookup(self.settings.get("tmdb_key", ""))
@@ -4818,11 +4997,12 @@ class Main:
 
         self.scan_c_btn = self._btn(tc, "scan_c", lambda: self.start_scan("dvbc"))
         self.scan_t_btn = self._btn(tc, "scan_t", lambda: self.start_scan("dvbt"))
-        self.chlist_btn = self._btn(tc, "chlist_btn", lambda: self.set_settings_view(False))
+        self.chlist_btn = None   # creat mai jos, în zona de jos, deasupra butonului „Despre”
         self.ca_btn = self._btn(tc, "ca_btn", self.start_ca_detect)
         self._btn(tc, "cfg_mpv", self.open_mpv_config)
         self._btn(tc, "side_btn", self.swap_side)
         self.rec_tip = Tip(self._btn(tc, "rec_dir", self.choose_rec_dir), str(self.rec_dir))
+        self.reset_tip = Tip(self._btn(tc, "reset_btn", self.reset_program), "", wrap=320)
         self.borderless_var = tk.BooleanVar(value=bool(self.settings.get("borderless", False)))
         cb = ttk.Checkbutton(tc, variable=self.borderless_var, command=self.apply_borderless)
         cb.pack(fill="x", pady=(5, 0))
@@ -4840,6 +5020,15 @@ class Main:
         cb4 = ttk.Checkbutton(tc, variable=self.show_media_var, command=self.on_toggle_media)
         cb4.pack(fill="x", pady=(5, 0))
         self.tr.append((cb4, "show_media"))
+        cr = ttk.Frame(tc)
+        cr.pack(fill="x", pady=(5, 0))
+        cl = ttk.Label(cr)
+        cl.pack(side="left", padx=(0, 8))
+        self.tr.append((cl, "country_label"))
+        self.country_box = ttk.Combobox(cr, state="readonly", font=self.f_norm)
+        self.country_box.pack(side="left", fill="x", expand=True)
+        self.country_box.bind("<<ComboboxSelected>>", self.on_country)
+        self.country_tip = Tip(self.country_box, "", wrap=300)
         self.progress_bar = ttk.Progressbar(tc, mode="indeterminate")
         self.cancel_btn = self._btn(tc, "scan_cancel", self.cancel_scan)
         self.cancel_btn.pack_forget()
@@ -4904,6 +5093,8 @@ class Main:
         self.info_img = tk.PhotoImage(data=make_info_icon())
         self.about_btn = ttk.Button(bottom, image=self.info_img, compound="left", command=self.show_about)
         self.tr.append((self.about_btn, "about_btn"))
+        self.chlist_btn = ttk.Button(bottom, command=self.show_channel_list)
+        self.tr.append((self.chlist_btn, "chlist_btn"))
 
         # Trei rotițe pe același rând: volum, joase, înalte (cu valoarea în mijloc și eticheta dedesubt)
         vol = self.vol_frame = ttk.Frame(bottom)
@@ -4990,11 +5181,12 @@ class Main:
     def set_settings_view(self, show):
         """Setările și (lista de canale + EPG + căutare) se exclud reciproc."""
         self.settings_on = show
-        for w in (self.tuner_container, self.about_btn, self.bottom_sep, self.epg_lbl, self.main_sep, self.list_frame,
+        for w in (self.tuner_container, self.chlist_btn, self.about_btn, self.bottom_sep, self.epg_lbl, self.main_sep, self.list_frame,
                   self.info_frame, self.search):
             w.pack_forget()
         if show:
             self.tuner_container.pack(fill="x")
+            self.chlist_btn.pack(fill="x", pady=(5, 0), before=self.vol_frame)
             self.about_btn.pack(fill="x", pady=(5, 0), before=self.vol_frame)
             self.bottom_sep.pack(fill="x", pady=(5, 5), before=self.vol_frame)     # sub „Despre”, deasupra volumului
         else:
@@ -5006,6 +5198,11 @@ class Main:
                 self.search.pack(fill="x", pady=5, before=self.bottom_sep)
         self._min_h = 0
         self.root.after_idle(self.fit_min_height)
+
+    def show_channel_list(self):
+        """Lista de canale se vede mereu (ieșim și din vederea „logo + poster”, care o ascunde)."""
+        self.info_mode = False
+        self.set_settings_view(False)
 
     def show_about(self):
         if self.about_win and self.about_win.winfo_exists():
@@ -5082,6 +5279,7 @@ class Main:
             self._logo_tok += 1
             self._poster_tok += 1
             self._logo_img = self._poster_img = self._poster_raw = self._poster_link = None
+            self._news = False
             self._poster_last_size = (0, 0)
             self._draw_logo()
             self._draw_poster()
@@ -5114,6 +5312,28 @@ class Main:
             return m.group(1)
         return "RO"
 
+    def _country_values(self):
+        return [self.t("country_auto")] + [f"{c} – {n}" for c, n in COUNTRY_NAMES.items()]
+
+    def _sync_country_box(self):
+        man = str(self.settings.get("country", "")).strip().upper()
+        vals = self._country_values()
+        self.country_box.configure(values=vals)
+        self.country_box.current(next((i for i, v in enumerate(vals) if i and v[:2] == man), 0))
+        self.country_tip.text = self.t("country_tip")
+
+    def on_country(self, _=None):
+        i = self.country_box.current()
+        self.settings["country"] = "" if i <= 0 else list(COUNTRY_NAMES)[i - 1]
+        self.chlist.focus_set()
+        self._info_key = None
+        self._logo_miss_reset()
+        if self.info_mode and not self.settings_on:
+            self.refresh_info(True)
+
+    def _logo_miss_reset(self):
+        self.media._logo_miss.clear()
+
     def _now_event(self):
         ev, now = self.epg_events(), time.time()
         return ev[0] if ev and ev[0][0] <= now else None
@@ -5129,7 +5349,7 @@ class Main:
             retry_poster = (ev is not None and self._poster_img is None and
                             time.time() - self._poster_last_attempt >= 90)
             if retry_poster:
-                self._start_poster(ev)
+                self._start_poster(ev, cc)
             return
         channel_changed = old is None or old[0] != key[0]
         country_changed = old is None or old[1] != key[1]
@@ -5138,8 +5358,8 @@ class Main:
             self._start_logo(chan, cc)
         retry_poster = (ev is not None and self._poster_img is None and
                         time.time() - self._poster_last_attempt >= 90)
-        if force or channel_changed or event_changed or retry_poster:
-            self._start_poster(ev)
+        if force or channel_changed or country_changed or event_changed or retry_poster:
+            self._start_poster(ev, cc)
 
     def _cv_size(self, cv, dw, dh):
         return max(cv.winfo_width(), 60) if cv.winfo_width() > 1 else dw, max(cv.winfo_height(), 40) if cv.winfo_height() > 1 else dh
@@ -5174,17 +5394,26 @@ class Main:
             w, h = self._cv_size(cv, 260, 96)
             cv.create_image(w // 2, h // 2, image=self._logo_img)
 
-    def _start_poster(self, ev):
+    def _start_poster(self, ev, cc=None):
+        cc = cc or self.country()
         self._poster_tok += 1
         tok = self._poster_tok
         self._poster_img = self._poster_raw = self._poster_link = None
         self._poster_last_size = (0, 0)
+        # Știrile nu au poster (căutarea găsea filme fără legătură, ex. „Stirile” → un film): desenăm un afiș.
+        self._news = bool(ev) and self.show_media_var.get() and bool(
+            NEWS.search(fold(ev[2])) or self.epg_genre(ev) == 2)
         self._draw_poster()
         if not self.show_media_var.get() or not ev:
             self._poster_last_attempt = 0.0
             return
+        if self._news:
+            self._poster_last_attempt = time.time()
+            return
         title, text = ev[2], ev[3]
         genre = self.epg_genre(ev)
+        if genre is None and self.cur and re.search(r"film|cinema|movie", fold(self.cur)):
+            genre = 1       # EPG-ul nu spune genul, dar canalul e de filme (Film Cafe, Film Mania...)
         if genre is None and NONMOVIE.search(fold(title)):
             self._poster_last_attempt = time.time()
             return
@@ -5192,7 +5421,7 @@ class Main:
         w, h = self._cv_size(self.poster_cv, 240, 300)
 
         def work():
-            raw, link = self.media.poster(title, text, genre)
+            raw, link = self.media.poster(title, text, genre, cc)
             png = image_to_png(raw, w - 16, h - 12) if raw else None
             self.events.put(lambda: self._poster_ready(tok, raw, png, link, (w, h)))
         threading.Thread(target=work, daemon=True).start()
@@ -5236,10 +5465,33 @@ class Main:
             self.events.put(lambda: tok == self._poster_tok and self._poster_ready(tok, raw, png, self._poster_link, (w, h)))
         threading.Thread(target=work, daemon=True).start()
 
+    def _draw_news(self, cv):
+        """Afiș stilizat pentru știri: două benzi identice ca stil (chenar alb, text alb, umbră): roșie „BREAKING NEWS”
+        și verde „Totul va fi bine!”."""
+        w, h = self._cv_size(cv, 240, 300)
+        pad = 14
+        lines = self.t("news_lines").split("\n")[:2]
+        bands = ((lines[0], "#c0111f"), (lines[1], "#1f8a3a"))
+        size = 26
+        while size > 9:
+            f = tkfont.Font(family="DejaVu Sans", size=-size, weight="bold")
+            if all(f.measure(t) <= w - 2 * pad - 14 for t, _ in bands):
+                break
+            size -= 1
+        band_h, gap = f.metrics("linespace") + 16, max(10, size // 2)
+        y = max(6, (h - (2 * band_h + gap)) // 2)
+        for t, col in bands:
+            cv.create_rectangle(pad // 2, y + 2, w - pad // 2 + 1, y + band_h + 2, fill="#8a8a8a", outline="")   # umbră
+            cv.create_rectangle(pad // 2, y, w - pad // 2, y + band_h, fill=col, outline="#ffffff", width=2)
+            cv.create_text(w // 2, y + band_h // 2, text=t, font=f, fill="#ffffff")
+            y += band_h + gap
+
     def _draw_poster(self):
         cv = self.poster_cv
         cv.delete("all")
-        if self.show_media_var.get() and self._poster_img is not None:          # fără poster încărcat nu se afișează nimic
+        if self.show_media_var.get() and self._news:
+            self._draw_news(cv)
+        elif self.show_media_var.get() and self._poster_img is not None:        # fără poster încărcat nu se afișează nimic
             w, h = self._cv_size(cv, 240, 300)
             cv.create_image(w // 2, h // 2, image=self._poster_img)
         cv.configure(cursor="hand2" if self.show_media_var.get() and self._poster_img is not None and self._poster_link else "arrow")
@@ -5414,6 +5666,9 @@ class Main:
         self.refresh_tip.text = self.t("refresh_tip")
         self.cfg_tip.text = self.t("cfg_tip")
         self.fast_tip.text = self.t("fast_tip")
+        self.reset_tip.text = self.t("reset_tip")
+        self._draw_poster()
+        self._sync_country_box()
         self._sync_stop_btn()
         self.update_video_msg()
         if self._ph_active:
@@ -5618,6 +5873,33 @@ class Main:
         if self.stream and name:
             self.tune(name)
 
+    def reset_program(self):
+        """Aduce programul la starea de după instalare: șterge tot din ~/.config/TeleopsDVB (canale, setări, mpv.conf,
+        programări, cache, jurnale) și închide programul. Înregistrările video nu se ating."""
+        if not messagebox.askyesno(TITLE, self.t("reset_confirm"), icon="warning", default="no", parent=self.root):
+            return
+        self._closing = True            # on_close nu mai salvează setările la ieșire
+        self.scan_cancelled = True
+        try:
+            if self.scan_proc:
+                self.scan_proc.kill()
+            self.stop()
+        except Exception:
+            pass
+        try:
+            rec = self.rec_dir.resolve()
+        except OSError:
+            rec = self.rec_dir
+        for p in list(CONF_DIR.iterdir()) if CONF_DIR.is_dir() else []:
+            try:
+                if rec == p.resolve() or p.resolve() in rec.parents:      # dosarul de înregistrări, dacă e aici, rămâne
+                    continue
+                shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+            except OSError:
+                pass
+        messagebox.showinfo(TITLE, self.t("reset_done"), parent=self.root)
+        self.root.destroy()
+
     def choose_rec_dir(self):
         start = self.rec_dir if self.rec_dir.is_dir() else Path.home()
         d = filedialog.askdirectory(parent=self.root, initialdir=start, title=self.t("rec_dir_title"))
@@ -5729,13 +6011,15 @@ class Main:
             cable = terr = False
         self.set_enabled(self.scan_c_btn, cable)
         self.set_enabled(self.scan_t_btn, terr)
-        self.set_enabled(self.ca_btn, bool(self.adapter_items) and not self.scan_active)
+        self.set_enabled(self.ca_btn, bool(self.adapter_items) and not self.scan_active
+                         and bool(self.tv_channels or self.radio_channels))
 
     def reload(self):
         self.tv_channels, self.radio_channels, self.locked = load_channels()
         self._radio_names = {c for c, _ in self.radio_channels}
         self.set_enabled(self.chlist_btn, bool(self.tv_channels or self.radio_channels))
         self.fill_channels()
+        self.update_scan_buttons()
 
     def fill_channels(self):
         scroll_pos = self.chlist.yview()
