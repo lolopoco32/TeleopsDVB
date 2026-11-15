@@ -110,7 +110,7 @@ from tkinter import filedialog, messagebox, ttk
 # ──────────────────────────────────────────────────────────────────────────────
 
 TITLE = "Teleops DVB"
-VERSION = "4.1.0"
+VERSION = "4.1.1"
 WM_NAME, WM_CLASS = "teleops", "Teleops"   # WM_CLASS al ferestrei: GNOME/KDE îl potrivesc cu fișierul .desktop (iconiță în bara de activități)
 CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
@@ -4689,6 +4689,123 @@ class Knob(tk.Canvas):
         return "break"
 
 
+_SPK_CACHE = {}
+
+
+def _speaker_png(D):
+    """Difuzor retro desenat pixel cu pixel (fără PIL): inel argintiu mat cu 4 șuruburi + grilaj negru perforat
+    (găuri în rețea hexagonală) cu două nervuri circulare, ca la grilajele de boxe auto. Lumina vine din stânga-sus.
+    Se calculează o singură dată pentru fiecare diametru D și se ține în cache."""
+    if D in _SPK_CACHE:
+        return _SPK_CACHE[D]
+    c = D / 2.0
+    Ro = c - 3.0                                   # raza inelului exterior (restul = loc pentru umbră)
+    Rg = Ro * 0.80                                 # raza grilajului
+    ring_rs = (0.26 * Rg, 0.66 * Rg)               # cele două nervuri circulare fără perforații
+    ring_w = max(1.3, Rg * 0.035)
+    buf = bytearray(D * D * 4)
+    for y in range(D):
+        dy = y + 0.5 - c
+        for x in range(D):
+            dx, i = x + 0.5 - c, y * D + x
+            r = math.hypot(dx, dy)
+            if r > Ro + 5:
+                continue
+            _over(buf, i, (0, 0, 0), 0.35 * _smooth((Ro + 3.0 - math.hypot(dx - 1.2, dy - 2.0)) / 4.0))     # umbra
+            cov = Ro - r + 0.5
+            if cov <= 0:
+                continue
+            cov = min(1.0, cov)
+            ux, uy = (dx / r, dy / r) if r > 1e-6 else (0.0, 0.0)
+            light = -(ux + uy) * 0.7071                                  # +1 spre stânga-sus, -1 spre dreapta-jos
+            if r >= Rg:                                                  # inelul argintiu
+                t = (r - Rg) / (Ro - Rg)
+                if t > 0.86:
+                    lum = 182 + 52 * light                               # teșitura exterioară
+                elif t < 0.14:
+                    lum = 150 - 55 * light                               # buza interioară (privește spre centru)
+                else:
+                    lum = 188 + 10 * light                               # fața plată, mată
+                lum *= 1 - 0.35 * _smooth((r - (Ro - 1.0)) / 1.0)         # contur exterior mai închis
+                col = (lum, lum, lum + 4)
+            else:                                                        # grilajul
+                lum = 20 + 8 * light * (r / Rg)
+                if r > Rg - 1.4:
+                    lum = 8                                              # umbra de sub buză
+                for rr in ring_rs:
+                    d = abs(r - rr)
+                    if d < ring_w:
+                        lum = 30 + 22 * (1 - d / ring_w) + 10 * light * (1 if r > rr else -1)
+                col = (lum, lum, lum + 2)
+            _over(buf, i, [max(0, min(255, v)) for v in col], cov)
+    pitch = max(2.8, Rg / 26.0)                                          # perforațiile, în rețea hexagonală
+    hr, rowsp = max(0.85, pitch * 0.30), pitch * 0.866
+    n = int(Rg / rowsp) + 2
+    for j in range(-n, n + 1):
+        cy = c + j * rowsp
+        for k in range(-n, n + 1):
+            cx = c + k * pitch + (pitch / 2 if j % 2 else 0)
+            r = math.hypot(cx - c, cy - c)
+            if r > Rg * 0.965 - hr or any(abs(r - rr) < ring_w + hr * 0.6 for rr in ring_rs):
+                continue
+            for py in range(int(cy - hr - 1), int(cy + hr + 2)):
+                for px in range(int(cx - hr - 1), int(cx + hr + 2)):
+                    if not (0 <= px < D and 0 <= py < D):
+                        continue
+                    cv = hr + 0.5 - math.hypot(px + 0.5 - cx, py + 0.5 - cy)
+                    if cv > 0:
+                        v = 100 + 28 * ((px + 0.5 - cx) + (py + 0.5 - cy)) * 0.7071 / hr    # jos-dreapta mai luminos
+                        v = max(60, min(135, v))
+                        _over(buf, py * D + px, (v, v, v + 3), min(1.0, cv) * 0.85)
+    rs = (Rg + Ro) / 2                                                   # 4 șuruburi pe inel, la 45°
+    for ang in (45, 135, 225, 315):
+        sx, sy = c + rs * math.cos(math.radians(ang)), c + rs * math.sin(math.radians(ang))
+        for py in range(int(sy - 5), int(sy + 6)):
+            for px in range(int(sx - 5), int(sx + 6)):
+                if not (0 <= px < D and 0 <= py < D):
+                    continue
+                d = math.hypot(px + 0.5 - sx, py + 0.5 - sy)
+                _over(buf, py * D + px, (128, 128, 132), min(1.0, 3.4 + 0.5 - d))       # teșitura găurii
+                _over(buf, py * D + px, (36, 36, 38), min(1.0, 2.1 + 0.5 - d))          # gaura
+                if d < 2.6:
+                    _over(buf, py * D + px, (170, 170, 174), 0.5 * _smooth((px + 0.5 - sx + py + 0.5 - sy) / 3.0))
+    _SPK_CACHE[D] = _png_b64(D, buf)
+    return _SPK_CACHE[D]
+
+
+class SpeakerGrille(tk.Canvas):
+    """Difuzorul retro cu grilaj + plăcuța „Teleops DVB” dedesubt. Are MĂRIME FIXĂ (nu se redimensionează niciodată) și
+    se desenează pe mijloc, pe orizontală și pe verticală. Canvasul cere exact cât ocupă difuzorul + plăcuța, așa că
+    `Main.fit_min_height` nu lasă fereastra să se micșoreze până să-l taie. Imaginea se generează abia la prima afișare."""
+    TEXT = "Teleops DVB"
+    SIZE, PLATE_H, GAP, MARGIN = 200, 18, 8, 10
+
+    def __init__(self, master, bg):
+        super().__init__(master, bg=bg, highlightthickness=0,
+                         height=self.SIZE + self.GAP + self.PLATE_H + 2 * self.MARGIN)     # înălțimea cerută = minimul
+        self._img = None
+        self._tf = tkfont.Font(family="DejaVu Sans", size=-11, weight="bold")
+        self.bind("<Configure>", lambda e: self._draw(e.width, e.height))
+
+    def _draw(self, w, h):
+        if self._img is None:
+            self._img = tk.PhotoImage(master=self, data=_speaker_png(self.SIZE))
+        self.delete("all")
+        D = self.SIZE
+        top = max(0, (h - (D + self.GAP + self.PLATE_H)) / 2)                                    # bloc centrat pe verticală
+        self.create_image(w / 2, top, image=self._img, anchor="n")
+        pw, ph = self._tf.measure(self.TEXT) + 24, self.PLATE_H
+        x0, y0 = (w - pw) / 2, top + D + self.GAP
+        self.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="#b9babd", outline="#5c5d60")
+        self.create_line(x0 + 1, y0 + 1, x0 + pw - 1, y0 + 1, fill="#e8e9ec")                    # muchie luminată sus
+        self.create_line(x0 + 1, y0 + ph - 1, x0 + pw - 1, y0 + ph - 1, fill="#8d8e92")          # umbră jos
+        for sx in (x0 + 6, x0 + pw - 6):                                                         # două nituri mici
+            self.create_oval(sx - 1.6, y0 + ph / 2 - 1.6, sx + 1.6, y0 + ph / 2 + 1.6, fill="#55575a", outline="#e0e1e4")
+        cx, cy = w / 2, y0 + ph / 2
+        self.create_text(cx + 1, cy + 1, text=self.TEXT, font=self._tf, fill="#eef0f2")          # text gravat
+        self.create_text(cx, cy, text=self.TEXT, font=self._tf, fill="#34353a")
+
+
 class JumpDialog(tk.Frame):
     """Salt rapid la canal (tasta J): căsuță așezată peste fereastra principală, în mijloc (în ecran complet = mijlocul ecranului).
     E un cadru în aceeași fereastră, nu o fereastră separată: focusul nu depinde de managerul de ferestre.
@@ -5083,6 +5200,9 @@ class Main:
         self.poster_cv.bind("<Configure>", lambda e: self._later("_poster_job", self._rescale_poster))
         self.logo_cv.bind("<Configure>", lambda e: self._later("_logo_job", self._draw_logo))
         self._poster_job = self._logo_job = None
+        # Difuzor retro + plăcuță „Teleops DVB”: umple vederea „informații” doar când logo/poster e dezactivat
+        self.speaker = SpeakerGrille(inf, bg_grey)
+        self._sync_speaker()
         self.emboss_font = tkfont.Font(family="DejaVu Sans", size=-16, weight="bold")
         self.search.pack(fill="x", pady=5)
 
@@ -5150,6 +5270,7 @@ class Main:
         self.chrome.bind_dead_zones(self.panel, exclude=(self.brand, self.mute_lbl))
         self.chrome.bind_drag(self.video)
         self.chrome.bind_drag(self.video_lbl)
+        self.chrome.bind_drag(self.speaker)
         root.after(40, self.chrome.start_mpv_poll)
         if self.borderless_var.get():
             root.after(400, self.apply_borderless)
@@ -5275,7 +5396,22 @@ class Main:
             self._info_key = None
             self.root.after(60, lambda: self.refresh_info(True))
 
+    def _sync_speaker(self):
+        """Fără logo/poster, vederea „informații” arată difuzorul (pe mijloc, pe verticală);
+        cu logo/poster activ, difuzorul dispare și revin cele două canvasuri."""
+        if self.show_media_var.get():
+            self.speaker.pack_forget()
+            self.logo_cv.pack(side="top", fill="x", pady=(6, 0))
+            self.poster_cv.pack(side="top", fill="both", expand=True, pady=6)
+        else:
+            self.logo_cv.pack_forget()
+            self.poster_cv.pack_forget()
+            self.speaker.pack(side="top", fill="both", expand=True)
+        self._min_h = 0                                      # înălțimea minimă se recalculează (difuzorul își cere locul)
+        self.root.after_idle(self.fit_min_height)
+
     def on_toggle_media(self):
+        self._sync_speaker()
         if not self.show_media_var.get():
             self._logo_tok += 1
             self._poster_tok += 1
@@ -5469,15 +5605,16 @@ class Main:
 
     def _draw_news(self, cv):
         """Afiș stilizat pentru știri: două benzi identice ca stil (chenar alb, text alb, umbră): roșie „BREAKING NEWS”
-        și verde „Totul va fi bine!”."""
+        și albastră „Totul va fi bine!”."""
         w, h = self._cv_size(cv, 240, 300)
         pad = 14
         lines = self.t("news_lines").split("\n")[:2]
-        bands = ((lines[0], "#c0111f"), (lines[1], "#1f8a3a"))
+        bands = ((lines[0], "#c0111f"), (lines[1], "#1f5fbf"))
+        en_lines = tr("English", "news_lines").split("\n")[:2]       # mărimea se calculează mereu după textul englezesc (cel mai lung)
         size = 26
         while size > 9:
             f = tkfont.Font(family="DejaVu Sans", size=-size, weight="bold")
-            if all(f.measure(t) <= w - 2 * pad - 14 for t, _ in bands):
+            if all(f.measure(t) <= w - 2 * pad - 14 for t in en_lines):
                 break
             size -= 1
         band_h, gap = f.metrics("linespace") + 16, max(10, size // 2)
