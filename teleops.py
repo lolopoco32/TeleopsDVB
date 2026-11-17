@@ -23,11 +23,13 @@ HARTA SECȚIUNILOR
              · strings: Textele interfeței (ro, en, it). Dialogul mpv: secțiunea i18n/strings_mpv.
              · strings_mpv: Texte pentru dialogul „Configurează MPV”. Format: cheie: (ro, en, it).
              · strings_rec: Texte pentru înregistrările programate și vizionările programate din EPG. Format: cheie: (ro, en, it).
+             · strings_ext: Texte pentru Timeshift, tema ferestrei, fereastra „Tuner TV”, tastele noi și „Programările mele” din EPG. Format: cheie: (ro, en, it).
              · translate: Traduceri: `tr(lang, cheie)`.
     system   Integrare cu sistemul: mediu, X11, D-Bus, anti-sleep, editor, instanță unică
              · dbus_min: Client D-Bus minimal, fără dependențe: doar apeluri de metodă pe session bus.
              · x11: Ajutor peste libX11 prin ctypes (fără dependențe de Tk).
              · env: Mediul de execuție: variabile curate pentru procese copil, căutarea mpv și a uneltelor DVB.
+             · theme: Tema sistemului (luminoasă / întunecată), pentru setarea „Automată”.
              · opener: Deschiderea unui fișier într-un editor de text.
              · single_instance: Doar o instanță a programului.
              · inhibit: Blochează suspend-ul, screensaver-ul și stingerea ecranului cât rulează programul.
@@ -40,7 +42,7 @@ HARTA SECȚIUNILOR
              · schedule: Programarea înregistrărilor din EPG: lista de joburi + deciziile (fără UI, fără Tk, testabil).
              · watch: „Vreau să vizionez”: comutarea automată pe canalul unei emisiuni, fără conflict cu înregistrările.
     player   mpv + dvbv5-zap: redare, script OSC, opțiuni și validare mpv
-             · osc_script: Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute, OSD EPG cu bară de progres, info video/audio, blocarea seek-ului). Se scrie în CONF_DIR la fiecare pornire.
+             · osc_script: Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute, OSD EPG cu bară de progres, info video/audio, bara Timeshift, banner de canal, blocarea seek-ului fără Timeshift). Se scrie în CONF_DIR la fiecare pornire.
              · mpv_options: Opțiunile mpv oferite în dialogul „Configurează MPV” și transformarea lor în linii de mpv.conf.
              · mpv_check: Validarea unei configurații mpv înainte s-o salvăm: pornește scurt mpv pe o sursă de test.
              · streamer: Redarea unui canal: dvbv5-zap -> (filtru TS) -> mpv încorporat în fereastra Tk, cu control prin IPC.
@@ -49,8 +51,9 @@ HARTA SECȚIUNILOR
              · geometry: Geometria redimensionării unei ferestre fără bordură (funcții pure, fără Tk, ușor de testat).
              · widgets: Widgeturi Tk reutilizabile: lista de canale și tooltip.
              · window_chrome: Comportamentul ferestrei: mutare prin tragere, fără bordură/titlebar și redimensionare fără margini.
-             · epg_window: Fereastra cu programul TV (EPG) al canalului curent.
+             · epg_window: Fereastra cu programul TV (EPG) al canalului curent și fila „Programările mele”.
              · mpv_dialog: Dialogul „Configurează MPV”: opțiuni alese din liste (potrivite pentru TV), plus acces la mpv.conf.
+             · tuner_window: Fereastra „Tuner TV”: alegerea tunerului, scanările de canale și detectarea canalelor codate (dimensiuni fixe).
              · main_window: Fereastra principală: panou cu comenzi + zonă video (mpv încorporat), listă de canale, scanare, înregistrare.
     app      Punctul de pornire: compune totul
              · app: Punctul de pornire: verifică dependențele, pregătește configurația și rulează fereastra principală.
@@ -110,7 +113,7 @@ from tkinter import filedialog, messagebox, ttk
 # ──────────────────────────────────────────────────────────────────────────────
 
 TITLE = "Teleops DVB"
-VERSION = "4.1.1"
+VERSION = "4.5.0"
 WM_NAME, WM_CLASS = "teleops", "Teleops"   # WM_CLASS al ferestrei: GNOME/KDE îl potrivesc cu fișierul .desktop (iconiță în bara de activități)
 CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
@@ -380,7 +383,7 @@ T = {  # cheie: (ro, en, it)
     "quit_app": ("⏻ Închide programul", "⏻ Quit program", "⏻ Chiudi il programma"),
     "borderless": ("Fără margini și bară de titlu", "No window borders / titlebar", "Senza bordi e barra del titolo"),
     "x11_na": ("Funcția cere X11/XWayland (libX11 indisponibil).", "This needs X11/XWayland (libX11 unavailable).", "Richiede X11/XWayland (libX11 non disponibile)."),
-    "side_btn": ("⇄ Player video: stânga / dreapta", "⇄ Video player: left / right", "⇄ Lettore video: sinistra / destra"),
+    "side_btn": ("⇄ Mută panoul GUI", "⇄ Move GUI panel", "⇄ Sposta pannello GUI"),
     # Localizare OSD MPV
     "osd_loading": ("Se încarcă EPG...", "Loading EPG...", "Caricamento EPG..."),
     "osd_na": ("Indisponibil", "Unavailable", "Non disponibile"),
@@ -391,7 +394,7 @@ T = {  # cheie: (ro, en, it)
     "info_noaud": ("fără audio", "no audio", "nessun audio"),
     "scrambled": ("Canal codat (criptat): nu poate fi redat fără card/CAM.", "Scrambled (encrypted) channel: it can't be played without a card/CAM.", "Canale criptato: non riproducibile senza card/CAM."),
     "chlist_btn": ("📺 Lista Canale TV", "📺 TV Channel List", "📺 Elenco canali TV"),
-    "cfg_tip": ("Setări / Listă canale", "Settings / Channel list", "Impostazioni / Elenco canali"),
+    "cfg_tip": ("Setări", "Settings", "Impostazioni"),
     "country_label": ("Țara (logo și poster)", "Country (logo & poster)", "Paese (logo e poster)"),
     "country_auto": ("Automat", "Automatic", "Automatico"),
     "country_tip": ("Țara al cărei conținut e căutat primul pentru logo-uri și postere (limba titlurilor, magazinul de filme, \n"
@@ -740,12 +743,77 @@ REC_T = {
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SECȚIUNE i18n/strings_ext
+#   Texte pentru Timeshift, tema ferestrei, fereastra „Tuner TV”, tastele noi și „Programările mele” din EPG.
+#   Format: cheie: (ro, en, it).
+# ──────────────────────────────────────────────────────────────────────────────
+
+EXT_T = {
+    # Timeshift (pauză / derulare la TV live)
+    "ts_enable": ("Activare Timeshift", "Enable Timeshift", "Attiva Timeshift"),
+    "ts_size_label": ("Buffer maxim:", "Maximum buffer:", "Buffer massimo:"),
+    "ts_tip": ("Pauză și derulare înapoi/înainte la TV live, cu bufferul mpv (RAM + disc). Space = pauză, "
+               "Ctrl+←/→ = derulare 10 s, Ctrl+0 = înapoi la live; bara de comandă apare la pauză, la derulare sau cu click dreapta pe video. "
+               "Bufferul se golește la schimbarea canalului. Se aplică imediat dacă nu înregistrezi; altfel, la următorul canal.",
+               "Pause and rewind/fast-forward on live TV, using the mpv buffer (RAM + disk). Space = pause, "
+               "Ctrl+←/→ = seek 10 s, Ctrl+0 = back to live; the control bar shows when paused, when seeking or on right click over the video. "
+               "The buffer is cleared when the channel changes. Applies at once unless you are recording; then it applies to the next channel.",
+               "Pausa e riavvolgimento/avanzamento nella TV in diretta, con il buffer di mpv (RAM + disco). Spazio = pausa, "
+               "Ctrl+←/→ = salto di 10 s, Ctrl+0 = torna alla diretta; la barra di controllo appare in pausa, durante il salto o con clic destro sul video. "
+               "Il buffer si svuota al cambio di canale. Si applica subito se non stai registrando; altrimenti al canale successivo."),
+    "ts_later": ("Timeshift se va aplica la următoarea schimbare de canal.",
+                 "Timeshift will apply on the next channel change.",
+                 "Timeshift si applicherà al prossimo cambio di canale."),
+    # Tema
+    "theme_label": ("Temă:", "Theme:", "Tema:"),
+    "theme_light": ("Luminoasă", "Light", "Chiaro"),
+    "theme_dark": ("Întunecată", "Dark", "Scuro"),
+    "theme_auto": ("Automată (după sistem)", "Auto (follow system)", "Automatico (come il sistema)"),
+    # Fereastra „Tuner TV”
+    "tuner_btn": ("📡 Tuner TV", "📡 TV Tuner", "📡 Sintonizzatore TV"),
+    "tuner_title": ("Tuner TV", "TV Tuner", "Sintonizzatore TV"),
+    "tuner_close": ("Închide", "Close", "Chiudi"),
+    # Taste noi (fila „Comenzi rapide” din „Despre”)
+    "hk_chan": ("Canal următor / anterior (după 3 s)", "Next / previous channel (after 3 s)", "Canale successivo / precedente (dopo 3 s)"),
+    "hk_chan_k": ("↑ / ↓ pe video; Enter = acum", "↑ / ↓ on video; Enter = now", "↑ / ↓ sul video; Invio = subito"),
+    "hk_volkeys": ("Volum (tastatură)", "Volume (keyboard)", "Volume (tastiera)"),
+    "hk_volkeys_k": ("← / → pe video", "← / → on video", "← / → sul video"),
+    "hk_ts_pause": ("Pauză / redare (Timeshift)", "Pause / play (Timeshift)", "Pausa / riproduzione (Timeshift)"),
+    "hk_ts_pause_k": ("Space", "Space", "Spazio"),
+    "hk_ts_seek": ("Înapoi / înainte 10 s (Timeshift)", "Back / forward 10 s (Timeshift)", "Indietro / avanti 10 s (Timeshift)"),
+    "hk_ts_seek_k": ("CTRL + ← / →", "CTRL + ← / →", "CTRL + ← / →"),
+    "hk_ts_live": ("Salt la live (Timeshift)", "Jump to live (Timeshift)", "Vai alla diretta (Timeshift)"),
+    "hk_ts_live_k": ("CTRL + 0", "CTRL + 0", "CTRL + 0"),
+    "hk_ts_bar": ("Bară Timeshift cu mouse-ul", "Timeshift bar with the mouse", "Barra Timeshift con il mouse"),
+    "hk_ts_bar_k": ("Click dreapta pe video", "Right click on video", "Clic destro sul video"),
+    # EPG: fila „Programările mele”
+    "epg_tab_prog": ("Program TV", "TV Guide", "Guida TV"),
+    "epg_tab_my": ("Programările mele", "My schedule", "Le mie programmazioni"),
+    "my_rec": ("⏺ Înregistrare", "⏺ Recording", "⏺ Registrazione"),
+    "my_watch": ("📺 Vizionare", "📺 Viewing", "📺 Visione"),
+    "my_col_type": ("Tip", "Type", "Tipo"),
+    "my_col_channel": ("Canal", "Channel", "Canale"),
+    "my_delete": ("🗑 Șterge programarea", "🗑 Delete item", "🗑 Elimina"),
+    "my_clear": ("Golește tot", "Clear all", "Svuota tutto"),
+    "my_empty": ("Nu ai nicio înregistrare sau vizionare programată.",
+                 "You have no scheduled recordings or viewings.",
+                 "Non hai registrazioni o visioni programmate."),
+    "my_deleted": ("Programarea a fost ștearsă.", "The item was deleted.", "La programmazione è stata eliminata."),
+    "my_cleared": ("Toate programările au fost șterse.", "All scheduled items were deleted.", "Tutte le programmazioni sono state eliminate."),
+    "my_clear_confirm": ("Ștergi toate programările (înregistrări și vizionări)?",
+                         "Delete all scheduled items (recordings and viewings)?",
+                         "Eliminare tutte le programmazioni (registrazioni e visioni)?"),
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # SECȚIUNE i18n/translate
 #   Traduceri: `tr(lang, cheie)`.
 # ──────────────────────────────────────────────────────────────────────────────
 
 T.update(MPV_T)
 T.update(REC_T)
+T.update(EXT_T)
 
 
 def tr(lang, key):
@@ -1066,6 +1134,60 @@ def missing_dependencies():
 
 def deps_message(missing):
     return "Următoarele dependențe lipsesc pe sistem:\n\n" + "\n".join(f"  • {m}" for m in missing) + DEPS_MISSING_TAIL
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECȚIUNE system/theme
+#   Tema sistemului (luminoasă / întunecată), pentru setarea „Automată”. Fără dependențe: GNOME/GTK, KDE, GTK_THEME.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _read_ini(path):
+    try:
+        cp = configparser.RawConfigParser(strict=False)
+        cp.read(path, encoding="utf-8")
+        return cp
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return None
+
+
+def _gsettings(key):
+    try:
+        r = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", key], capture_output=True, text=True,
+                           timeout=2, env=get_clean_env(), stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout.strip().strip("'\"").lower() if r.returncode == 0 else ""
+
+
+def system_prefers_dark():
+    """True dacă sistemul folosește o temă întunecată. Dacă nu se poate afla nimic, False (tema luminoasă)."""
+    gtk_theme = os.environ.get("GTK_THEME", "").lower()
+    if gtk_theme:
+        return "dark" in gtk_theme
+    scheme = _gsettings("color-scheme")
+    if "dark" in scheme:
+        return True
+    if "light" in scheme:
+        return False
+    if "dark" in _gsettings("gtk-theme"):
+        return True
+    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    kde = _read_ini(cfg / "kdeglobals")                  # KDE: luminanța fundalului ferestrelor (sau numele schemei)
+    if kde is not None:
+        try:
+            r, g, b = (int(v) for v in kde.get("Colors:Window", "BackgroundNormal").split(",")[:3])
+            return 0.299 * r + 0.587 * g + 0.114 * b < 128
+        except (configparser.Error, ValueError):
+            if "dark" in kde.get("General", "ColorScheme", fallback="").lower():
+                return True
+    for ver in ("gtk-4.0", "gtk-3.0"):
+        ini = _read_ini(cfg / ver / "settings.ini")
+        if ini is not None:
+            if ini.get("Settings", "gtk-application-prefer-dark-theme", fallback="").strip().lower() in ("1", "true"):
+                return True
+            if "dark" in ini.get("Settings", "gtk-theme-name", fallback="").lower():
+                return True
+    return False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1947,13 +2069,18 @@ class WatchSchedule:
 #   Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute). Se scrie în CONF_DIR la fiecare pornire.
 # ──────────────────────────────────────────────────────────────────────────────
 
-OSC_LUA = r'''-- Teleops DVB: mini-OSC cu doar subtitrare, coloană sonoră și difuzor (înlocuiește OSC-ul standard mpv).
+OSC_LUA = r'''-- Teleops DVB: mini-OSC cu subtitrare, coloană sonoră, difuzor și (cu Timeshift) bara de pauză/derulare.
 -- Fișier generat de teleops.py (se rescrie la fiecare pornire).
 local L = {sub = "Subtitrare", audio = "Coloană sonoră", off = "Dezactivat"}
 local ACC = "FFC040"
 local shown, menu, items, timer = false, nil, {}, nil
 local last_over, last_hot = false, false
 local ov = mp.create_osd_overlay("ass-events")
+
+-- Timeshift: activ doar dacă programul a pornit mpv cu bufferul pe disc (--cache-on-disk=yes), adică cu setarea bifată.
+local TS = mp.get_property("options/cache-on-disk", "no") == "yes"
+local TS_STEP, TS_SLACK = 10, 4      -- pasul de derulare (s); sub TS_SLACK secunde în urma live-ului suntem „la live”
+local ts = {lo = 0, hi = 0, pos = 0, behind = 0, paused = false, flash = 0}
 
 local function I(v) return math.floor(v + 0.5) end
 local function esc(s) return (tostring(s):gsub("[{}\\\n]", " ")) end
@@ -1993,20 +2120,64 @@ local function menu_layout(w, h, k, bars)
     return m
 end
 
+local function ts_layout(w, h, k)
+    local bars = bar_rects(w, h, k)
+    local bw, bh, gap, m = 34 * k, 34 * k, 6 * k, 18 * k
+    local y0 = bars.sub[2]
+    local r, x = {}, m
+    for _, name in ipairs({"back", "play", "fwd"}) do
+        r[name] = {x, y0, x + bw, y0 + bh}
+        x = x + bw + gap
+    end
+    local right = bars.sub[1] - 14 * k          -- se oprește înainte de butoanele CC / ♪ / difuzor
+    r.live = {right - 70 * k, y0, right, y0 + bh}
+    r.time = {r.live[1] - gap - 80 * k, y0, r.live[1] - gap, y0 + bh}
+    r.track = {x, y0, math.max(x, r.time[1] - gap), y0 + bh}
+    return r
+end
+
+-- bara Timeshift se vede: cu bara OSC deschisă (click dreapta), în pauză, în urma live-ului sau 5 s după o comandă
+local function ts_visible()
+    return TS and (shown or ts.paused or ts.behind > TS_SLACK or mp.get_time() < ts.flash)
+end
+
+local function ts_update()
+    ts.paused = mp.get_property_bool("pause", false)
+    local pos = mp.get_property_number("time-pos")
+    local st = mp.get_property_native("demuxer-cache-state")
+    if not pos or not st then
+        ts.lo, ts.hi, ts.pos, ts.behind = 0, 0, 0, 0
+        return
+    end
+    local ranges = st["seekable-ranges"]
+    local r = ranges and ranges[#ranges]
+    local lo = (r and r.start) or pos
+    local hi = (r and r["end"]) or st["cache-end"] or pos
+    if hi < pos then hi = pos end
+    if lo > pos then lo = pos end
+    ts.lo, ts.hi, ts.pos, ts.behind = lo, hi, pos, hi - pos
+end
+
 local function hit(x, y)
-    if not shown then return nil end
     local w, h, k = geom()
     if not w then return nil end
-    local bars = bar_rects(w, h, k)
-    local m = menu_layout(w, h, k, bars)
-    if m then
-        for i, r in ipairs(m.rows) do
-            if inside(r, x, y) then return "row", i end
+    if shown then
+        local bars = bar_rects(w, h, k)
+        local m = menu_layout(w, h, k, bars)
+        if m then
+            for i, r in ipairs(m.rows) do
+                if inside(r, x, y) then return "row", i end
+            end
+            if inside(m.rect, x, y) then return "menu" end
         end
-        if inside(m.rect, x, y) then return "menu" end
+        for name, r in pairs(bars) do
+            if inside(r, x, y) then return "btn", name end
+        end
     end
-    for name, r in pairs(bars) do
-        if inside(r, x, y) then return "btn", name end
+    if ts_visible() then
+        for name, r in pairs(ts_layout(w, h, k)) do
+            if name ~= "time" and inside(r, x, y) then return "ts", name end
+        end
     end
     return nil
 end
@@ -2033,6 +2204,60 @@ local function icon(cx, cy, k, muted)
         I(cx), I(cy), muted and "6060FF" or "FFFFFF", s, s, shape)
 end
 
+-- icoane Timeshift desenate vectorial (nu depind de fonturi)
+local ICON_BACK = "m 9 0 l 0 7 l 9 14 m 18 0 l 9 7 l 18 14"
+local ICON_FWD = "m 0 0 l 9 7 l 0 14 m 9 0 l 18 7 l 9 14"
+local ICON_PLAY = "m 0 0 l 12 7 l 0 14"
+local ICON_PAUSE = "m 0 0 l 4 0 l 4 14 l 0 14 m 8 0 l 12 0 l 12 14 l 8 14"
+
+local function shape(cx, cy, k, color, path)
+    local sc = I(100 * k)
+    return string.format("{\\an5\\pos(%d,%d)\\bord0\\shad0\\1c&H%s&\\fscx%d\\fscy%d\\p1}%s{\\p0}",
+        I(cx), I(cy), color, sc, sc, path)
+end
+
+local function fmt_behind(sec)
+    sec = math.max(0, math.floor(sec + 0.5))
+    if sec >= 3600 then
+        return string.format("-%d:%02d:%02d", math.floor(sec / 3600), math.floor((sec % 3600) / 60), sec % 60)
+    end
+    return string.format("-%02d:%02d", math.floor(sec / 60), sec % 60)
+end
+
+local function ts_draw(ln, w, h, k, mx, my)
+    local r = ts_layout(w, h, k)
+    local live = ts.behind <= TS_SLACK
+    for _, name in ipairs({"back", "play", "fwd", "live"}) do
+        local b = r[name]
+        local hot = inside(b, mx, my)
+        ln[#ln + 1] = rect(b[1], b[2], b[3], b[4], hot and "808080" or "000000", hot and "50" or "70")
+        local cx, cy = (b[1] + b[3]) / 2, (b[2] + b[4]) / 2
+        if name == "back" then
+            ln[#ln + 1] = shape(cx, cy, k, "FFFFFF", ICON_BACK)
+        elseif name == "fwd" then
+            ln[#ln + 1] = shape(cx, cy, k, "FFFFFF", ICON_FWD)
+        elseif name == "play" then
+            ln[#ln + 1] = shape(cx, cy, k, "FFFFFF", ts.paused and ICON_PLAY or ICON_PAUSE)
+        else
+            ln[#ln + 1] = text(cx, cy, 5, 15 * k, live and "● LIVE" or "LIVE", live and "2626DC" or ACC)
+        end
+    end
+    local t, tm = r.track, r.time
+    ln[#ln + 1] = rect(t[1], t[2], tm[3], t[4], "000000", "70")                -- fundal pentru bară + timp
+    if t[3] - t[1] > 30 * k then
+        local mid, th = (t[2] + t[4]) / 2, 8 * k
+        local bx0, bx1 = t[1] + 8 * k, t[3] - 8 * k
+        local span = ts.hi - ts.lo
+        local f = span > 0 and math.max(0, math.min(1, (ts.pos - ts.lo) / span)) or 1
+        local px = bx0 + (bx1 - bx0) * f
+        ln[#ln + 1] = rect(bx0, mid - th / 2, bx1, mid + th / 2, "808080", "60")
+        ln[#ln + 1] = rect(bx0, mid - th / 2, px, mid + th / 2, ACC, "00")
+        ln[#ln + 1] = rect(px - 2 * k, mid - 8 * k, px + 2 * k, mid + 8 * k, "FFFFFF", "00")
+    end
+    ln[#ln + 1] = text((tm[1] + tm[3]) / 2, (tm[2] + tm[4]) / 2, 5, 15 * k,
+        fmt_behind(live and 0 or ts.behind), live and "D0D0D0" or ACC)
+end
+
 local function build_items(kind)
     local out, any = {}, false
     for _, t in ipairs(mp.get_property_native("track-list") or {}) do
@@ -2052,42 +2277,47 @@ end
 
 local function render()
     local w, h, k = geom()
-    if not shown or not w then
+    local tsv = ts_visible()
+    if not w or not (shown or tsv) then
         ov:remove()
         return
     end
     ov.res_x, ov.res_y = w, h
-    local bars = bar_rects(w, h, k)
     local mx, my = mp.get_mouse_pos()
-    local ln, sub_on = {}, false
-    for _, t in ipairs(mp.get_property_native("track-list") or {}) do
-        if t.type == "sub" and t.selected then sub_on = true end
-    end
-    local muted = mp.get_property_bool("mute", false)
-    for _, name in ipairs({"sub", "audio", "spk"}) do
-        local r = bars[name]
-        local hot = inside(r, mx, my) or menu == name
-        ln[#ln + 1] = rect(r[1], r[2], r[3], r[4], hot and "808080" or "000000", hot and "50" or "70")
-        local cx, cy = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2
-        if name == "sub" then
-            ln[#ln + 1] = text(cx, cy, 5, 17 * k, "CC", sub_on and ACC or "FFFFFF")
-        elseif name == "audio" then
-            ln[#ln + 1] = text(cx, cy, 5, 22 * k, "♪", "FFFFFF")
-        else
-            ln[#ln + 1] = icon(cx, cy, k, muted)
+    local ln = {}
+    if shown then
+        local bars = bar_rects(w, h, k)
+        local sub_on = false
+        for _, t in ipairs(mp.get_property_native("track-list") or {}) do
+            if t.type == "sub" and t.selected then sub_on = true end
+        end
+        local muted = mp.get_property_bool("mute", false)
+        for _, name in ipairs({"sub", "audio", "spk"}) do
+            local r = bars[name]
+            local hot = inside(r, mx, my) or menu == name
+            ln[#ln + 1] = rect(r[1], r[2], r[3], r[4], hot and "808080" or "000000", hot and "50" or "70")
+            local cx, cy = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2
+            if name == "sub" then
+                ln[#ln + 1] = text(cx, cy, 5, 17 * k, "CC", sub_on and ACC or "FFFFFF")
+            elseif name == "audio" then
+                ln[#ln + 1] = text(cx, cy, 5, 22 * k, "♪", "FFFFFF")
+            else
+                ln[#ln + 1] = icon(cx, cy, k, muted)
+            end
+        end
+        local m = menu_layout(w, h, k, bars)
+        if m then
+            ln[#ln + 1] = rect(m.rect[1], m.rect[2], m.rect[3], m.rect[4], "000000", "30")
+            ln[#ln + 1] = text(m.hdr[1] + 12 * k, (m.hdr[2] + m.hdr[4]) / 2, 4, 15 * k, esc(L[menu]), "B0B0B0")
+            for i, r in ipairs(m.rows) do
+                local it = items[i]
+                if inside(r, mx, my) then ln[#ln + 1] = rect(r[1], r[2], r[3], r[4], "808080", "60") end
+                ln[#ln + 1] = text(r[1] + 12 * k, (r[2] + r[4]) / 2, 4, 16 * k,
+                    (it.sel and "● " or "   ") .. esc(it.label), it.sel and ACC or "FFFFFF")
+            end
         end
     end
-    local m = menu_layout(w, h, k, bars)
-    if m then
-        ln[#ln + 1] = rect(m.rect[1], m.rect[2], m.rect[3], m.rect[4], "000000", "30")
-        ln[#ln + 1] = text(m.hdr[1] + 12 * k, (m.hdr[2] + m.hdr[4]) / 2, 4, 15 * k, esc(L[menu]), "B0B0B0")
-        for i, r in ipairs(m.rows) do
-            local it = items[i]
-            if inside(r, mx, my) then ln[#ln + 1] = rect(r[1], r[2], r[3], r[4], "808080", "60") end
-            ln[#ln + 1] = text(r[1] + 12 * k, (r[2] + r[4]) / 2, 4, 16 * k,
-                (it.sel and "● " or "   ") .. esc(it.label), it.sel and ACC or "FFFFFF")
-        end
-    end
+    if tsv then ts_draw(ln, w, h, k, mx, my) end
     ov.data = table.concat(ln, "\n")
     ov:update()
 end
@@ -2117,6 +2347,76 @@ local function show()
     render()
 end
 
+-- acțiuni Timeshift: pauză, derulare în buffer (doar în intervalul memorat), salt la live
+local function ts_poke()
+    ts.flash = mp.get_time() + 5
+    ts_update()
+    render()
+end
+
+local function ts_seek_abs(t)
+    ts_update()
+    if ts.hi - ts.lo < 1.5 then return end
+    t = math.max(ts.lo + 0.5, math.min(ts.hi - 0.5, t))
+    mp.commandv("seek", tostring(t), "absolute")
+    ts_poke()
+end
+
+local function ts_seek_rel(d)
+    ts_update()
+    ts_seek_abs(ts.pos + d)
+end
+
+local function ts_live()
+    ts_update()
+    if ts.hi - ts.lo >= 1.5 then
+        mp.commandv("seek", tostring(math.max(ts.lo + 0.5, ts.hi - 0.5)), "absolute")
+    end
+    mp.set_property_bool("pause", false)
+    ts_poke()
+end
+
+local function ts_toggle_pause()
+    mp.set_property_bool("pause", not mp.get_property_bool("pause", false))
+    ts_poke()
+end
+
+local function ts_act(name, x)
+    if name == "back" then
+        ts_seek_rel(-TS_STEP)
+    elseif name == "fwd" then
+        ts_seek_rel(TS_STEP)
+    elseif name == "play" then
+        ts_toggle_pause()
+    elseif name == "live" then
+        ts_live()
+    elseif name == "track" then
+        local w, h, k = geom()
+        if not w then return end
+        local t = ts_layout(w, h, k).track
+        local bx0, bx1 = t[1] + 8 * k, t[3] - 8 * k
+        if bx1 > bx0 then
+            ts_update()
+            ts_seek_abs(ts.lo + math.max(0, math.min(1, (x - bx0) / (bx1 - bx0))) * (ts.hi - ts.lo))
+        end
+    end
+end
+
+-- la fiecare 0,5 s: reface bara (poziția se mișcă) și o șterge când nu mai trebuie să se vadă
+local ts_drawn = false
+local function ts_tick()
+    ts_update()
+    local vis = ts_visible()
+    if vis or ts_drawn then
+        render()
+        if not vis then
+            set_hot(false)
+            last_over = false
+        end
+    end
+    ts_drawn = vis
+end
+
 local function apply(kind, i)
     local it = items[i]
     if not it then return end
@@ -2134,12 +2434,13 @@ end
 
 -- mișcarea mouse-ului NU mai arată bara (apare doar la click dreapta); aici doar o ținem vie și urmărim hover-ul
 mp.observe_property("mouse-pos", "native", function(_, pos)
-    if not pos or not shown then return end
+    if not pos then return end
+    if not shown and not ts_visible() then return end
     if not pos.hover then
         set_hot(false)
         return
     end
-    arm()
+    if shown then arm() end
     local over = hit(pos.x, pos.y) ~= nil
     set_hot(over)
     if over or last_over then render() end
@@ -2147,9 +2448,13 @@ mp.observe_property("mouse-pos", "native", function(_, pos)
 end)
 
 local function on_click()
-    if not shown then return end
     local x, y = mp.get_mouse_pos()
     local kind, v = hit(x, y)
+    if kind == "ts" then
+        ts_act(v, x)
+        return
+    end
+    if not shown then return end
     if kind == "row" then
         apply(menu, v)
         menu = nil
@@ -2201,13 +2506,17 @@ mp.register_script_message("teleops-labels", function(a, b, c)
     if c and c ~= "" then L.off = c end
 end)
 
--- TV live: fără seek. Săgețile (și combinațiile cu Shift/Ctrl) și PgUp/PgDn nu mai fac nimic.
+-- TV live: fără seek (cu Timeshift, Ctrl+←/→ derulează în buffer). Shift+săgeți și PgUp/PgDn nu mai fac nimic.
+-- ←/→ (volum) și ↑/↓ (canal) simple le leagă programul prin IPC (vezi Streamer.KEYS).
 -- (Alt+săgeți rămâne pan video, nu e seek.)
-for _, key in ipairs({"LEFT", "RIGHT", "UP", "DOWN",
-                      "Shift+LEFT", "Shift+RIGHT", "Shift+UP", "Shift+DOWN",
-                      "Ctrl+LEFT", "Ctrl+RIGHT", "Ctrl+UP", "Ctrl+DOWN",
-                      "Ctrl+Shift+LEFT", "Ctrl+Shift+RIGHT",
-                      "PGUP", "PGDWN", "Shift+PGUP", "Shift+PGDWN"}) do
+local noseek = {"Shift+LEFT", "Shift+RIGHT", "Shift+UP", "Shift+DOWN",
+                "Ctrl+UP", "Ctrl+DOWN", "Ctrl+Shift+LEFT", "Ctrl+Shift+RIGHT",
+                "PGUP", "PGDWN", "Shift+PGUP", "Shift+PGDWN"}
+if not TS then
+    noseek[#noseek + 1] = "Ctrl+LEFT"
+    noseek[#noseek + 1] = "Ctrl+RIGHT"
+end
+for _, key in ipairs(noseek) do
     mp.add_forced_key_binding(key, "teleops-noseek-" .. key, function() end)
 end
 
@@ -2287,7 +2596,7 @@ end
 
 local function info_render()
     local w, h, k = geom()
-    if not info_on or not w then
+    if not info_on or not w or ts_visible() then
         info_ov:remove()
         return
     end
@@ -2460,13 +2769,76 @@ for _, key in ipairs({"q", "Q", "Ctrl+c"}) do
     mp.add_forced_key_binding(key, "teleops-noquit-" .. key, function() end)
 end
 
--- Pauza nu are sens la TV live: o blocăm (SPACE, p, tastele media, frame-step) și o anulăm dacă apare oricum
-for _, key in ipairs({"SPACE", "p", "PAUSE", "PLAY", "PLAYPAUSE", ","}) do
-    mp.add_forced_key_binding(key, "teleops-nopause-" .. key, function() end)
+-- Banner de canal (↑/↓ pe video): numele canalului ales și o bară care se golește până la comutarea automată.
+-- Python trimite doar textul și durata (teleops-banner); desenul și animația sunt aici.
+local BN = {text = "", t0 = 0, ms = 3000, wait = false}
+local bn_ov = mp.create_osd_overlay("ass-events")
+local bn_timer = nil
+
+local function bn_render()
+    local w, h, k = geom()
+    if not w or BN.text == "" then
+        bn_ov:remove()
+        return
+    end
+    local fs, pad = 26 * k, 14 * k
+    local cw = fs * 0.6
+    local bw = math.min(w - 40 * k, math.max(220 * k, nchars(BN.text) * cw + 2 * pad))
+    local bh = fs * 1.5 + 2 * pad + (BN.wait and 10 * k or 0)
+    local x0, y0 = (w - bw) / 2, 24 * k
+    local ln = {rect(x0, y0, x0 + bw, y0 + bh, "000000", "40")}
+    ln[#ln + 1] = text(w / 2, y0 + pad + fs * 0.75, 5, fs, esc(ucut(BN.text, math.floor((bw - 2 * pad) / cw))), "FFFFFF")
+    if BN.wait then
+        local f = math.max(0, math.min(1, 1 - (mp.get_time() - BN.t0) * 1000 / BN.ms))
+        local by = y0 + bh - pad * 0.6 - 4 * k
+        ln[#ln + 1] = rect(x0 + pad, by, x0 + bw - pad, by + 4 * k, "808080", "60")
+        ln[#ln + 1] = rect(x0 + pad, by, x0 + pad + (bw - 2 * pad) * f, by + 4 * k, ACC, "00")
+    end
+    bn_ov.res_x, bn_ov.res_y = w, h
+    bn_ov.data = table.concat(ln, "\n")
+    bn_ov:update()
 end
-mp.observe_property("pause", "bool", function(_, v)
-    if v then mp.set_property_bool("pause", false) end
-end)
+
+local function bn_hide()
+    BN.text = ""
+    if bn_timer then bn_timer:kill() bn_timer = nil end
+    bn_ov:remove()
+end
+
+local function bn_show(txt, ms, wait)
+    BN.text, BN.ms, BN.wait, BN.t0 = txt or "", tonumber(ms) or 3000, wait == "1", mp.get_time()
+    if BN.text == "" then
+        bn_hide()
+        return
+    end
+    if bn_timer then bn_timer:kill() end
+    bn_timer = mp.add_periodic_timer(0.1, function()
+        if (mp.get_time() - BN.t0) * 1000 >= BN.ms + 150 then bn_hide() else bn_render() end
+    end)
+    bn_render()
+end
+mp.register_script_message("teleops-banner", bn_show)
+mp.observe_property("osd-dimensions", "native", function() if BN.text ~= "" then bn_render() end end)
+
+if TS then
+    -- Timeshift: pauza și derularea sunt permise (buffer mpv); frame-step rămâne blocat
+    for _, key in ipairs({"SPACE", "p", "PAUSE", "PLAY", "PLAYPAUSE"}) do
+        mp.add_forced_key_binding(key, "teleops-pause-" .. key, ts_toggle_pause)
+    end
+    mp.add_forced_key_binding(",", "teleops-nostep", function() end)
+    mp.add_forced_key_binding("Ctrl+LEFT", "teleops-ts-back", function() ts_seek_rel(-TS_STEP) end, {repeatable = true})
+    mp.add_forced_key_binding("Ctrl+RIGHT", "teleops-ts-fwd", function() ts_seek_rel(TS_STEP) end, {repeatable = true})
+    mp.add_forced_key_binding("Ctrl+0", "teleops-ts-live", ts_live)
+    mp.add_periodic_timer(0.5, ts_tick)
+else
+    -- Fără Timeshift pauza nu are sens la TV live: o blocăm (SPACE, p, tastele media, frame-step) și o anulăm dacă apare oricum
+    for _, key in ipairs({"SPACE", "p", "PAUSE", "PLAY", "PLAYPAUSE", ","}) do
+        mp.add_forced_key_binding(key, "teleops-nopause-" .. key, function() end)
+    end
+    mp.observe_property("pause", "bool", function(_, v)
+        if v then mp.set_property_bool("pause", false) end
+    end)
+end
 
 -- Căutarea „Salt la canal” (J): dacă tastatura a rămas la mpv, toate tastele de text merg la program (teleops-key)
 local cap_names = {}
@@ -2836,6 +3208,19 @@ def validate_mpv_conf(mpv_cmd, conf_text, timeout=10):
 
 IPC_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "app/io.mpv.Mpv"
 GPU_CONTEXT = os.environ.get("TELEOPS_GPU_CONTEXT", "x11egl")   # mpv încorporat cere X11 (XWayland sub Wayland)
+TIMESHIFT_DIR = Path.home() / ".cache" / "TeleopsDVB" / "timeshift"     # bufferul Timeshift de pe disc (îl șterge mpv la ieșire)
+TIMESHIFT_SIZES = (512, 1024, 2048)         # MB: alegerile din setări (se aplică la --demuxer-max-bytes și --demuxer-max-back-bytes)
+FEED_CHUNKS = 512                           # Timeshift: câte bucăți de 64 KiB (~32 MiB) așteaptă la mpv în pauză lungă
+
+
+def clean_timeshift_dir():
+    """Șterge resturile bufferului (rămase dacă mpv a fost oprit brusc). Apelat la pornire și la ieșire: o singură instanță rulează."""
+    try:
+        for f in TIMESHIFT_DIR.iterdir():
+            if f.is_file():
+                f.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 class Streamer:
@@ -2843,12 +3228,15 @@ class Streamer:
     # mesaj -> tastele mpv care îl trimit (cât timp mpv are focusul, Tk nu primește tastele; „i” simplu rămâne nativ mpv)
     KEYS = {"show-info-osd": ("i", "I"), "toggle-ui": (".", "MBTN_LEFT_DBL"), "toggle-fs": ("f", "F", "F11"),
             "toggle-rec": ("Ctrl+r", "Ctrl+R"), "show-epg": ("Ctrl+i", "Ctrl+I"),
-            "vol-up": ("WHEEL_UP",), "vol-down": ("WHEEL_DOWN",), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X"),
+            "vol-up": ("WHEEL_UP", "RIGHT"), "vol-down": ("WHEEL_DOWN", "LEFT"), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X"),
             "prev-channel": ("BS",), "jump-channel": ("j", "J"), "toggle-mute": ("m", "M"),
-            "toggle-info": ("Ctrl+h", "Ctrl+H")}
+            "toggle-info": ("Ctrl+h", "Ctrl+H"),
+            "ch-up": ("UP",), "ch-down": ("DOWN",), "ch-enter": ("ENTER", "KP_ENTER")}
 
-    def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None, tone=(0, 0), fast=False):
+    def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None, tone=(0, 0), fast=False, timeshift=0):
         self.props, self.on_prop, self.conn = dict(props), on_prop, None
+        self.timeshift = int(timeshift or 0)        # MB de buffer Timeshift (0 = oprit)
+        self._feed = queue.Queue(FEED_CHUNKS) if self.timeshift else None
         self.tone = tuple(tone)
         self.on_msg = on_msg or (lambda *_: None)
         self.osc_hot = False        # cursorul e pe un buton/meniu al mini-OSC-ului din mpv
@@ -2876,12 +3264,20 @@ class Streamer:
         if fast:    # pornire rapidă: flux MPEG-TS cunoscut (fără ghicirea formatului), analiză scurtă; calitatea redării rămâne cea din mpv.conf
             mpv += ["--ytdl=no", "--demuxer=lavf", "--demuxer-lavf-format=mpegts",
                     "--demuxer-lavf-probesize=1500000", "--demuxer-lavf-analyzeduration=1"]
+        if self.timeshift:      # pauză / derulare la TV live: buffer mpv în RAM + pe disc, atât înainte, cât și în urma redării
+            TIMESHIFT_DIR.mkdir(parents=True, exist_ok=True)
+            size = f"{self.timeshift}MiB"
+            mpv += ["--cache=yes", f"--demuxer-max-bytes={size}", f"--demuxer-max-back-bytes={size}",
+                    "--cache-on-disk=yes", f"--demuxer-cache-dir={TIMESHIFT_DIR}"]
         env = get_clean_env()
         if wid:   # încorporat în fereastra Tk: --wid există doar pe X11 (XWayland), deci interzicem backend-ul Wayland
             mpv += [f"--wid={wid}", f"--gpu-context={GPU_CONTEXT}", "--window-dragging=no", "--osc=no", "--osd-bar=no", f"--script={OSC_PATH}"]
             env.pop("WAYLAND_DISPLAY", None)
         self.mpv = subprocess.Popen(mpv + ["-"], stdin=subprocess.PIPE, env=env)
-        for target in (lambda: self._boot(zap_cmd), self.ipc):
+        targets = [lambda: self._boot(zap_cmd), self.ipc]
+        if self._feed is not None:
+            targets.append(self._feed_mpv)
+        for target in targets:
             threading.Thread(target=target, daemon=True).start()
 
     def _boot(self, zap_cmd):
@@ -2918,11 +3314,31 @@ class Streamer:
             while data := os.read(src, 1 << 16):
                 self.got_data = True
                 if self.ts: data = self.ts.feed(data)
-                if data:
+                if data and self._feed is None:
                     self.mpv.stdin.write(data)
                     self.mpv.stdin.flush()
                     with self.lock:
                         if self.rec: self.rec.write(data)
+                elif data:      # Timeshift: înregistrarea nu așteaptă niciodată după mpv (în pauză lungă mpv nu mai citește din pipe)
+                    with self.lock:
+                        if self.rec: self.rec.write(data)
+                    try:
+                        self._feed.put_nowait(data)
+                    except queue.Full:
+                        pass
+        except (OSError, ValueError):
+            pass
+
+    def _feed_mpv(self):
+        """Timeshift: scrie în mpv ce a pus `pump` în coadă. Dacă mpv nu mai citește (pauză peste buffer), doar acest fir așteaptă."""
+        try:
+            while not self._stopped:
+                try:
+                    data = self._feed.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                self.mpv.stdin.write(data)
+                self.mpv.stdin.flush()
         except (OSError, ValueError):
             pass
 
@@ -3021,6 +3437,14 @@ class Streamer:
         self.show_tv_osd()
         self.cmd("script-message", "teleops-info-show")
 
+    def show_banner(self, text, ms=3000, wait=True):
+        """Banner mic cu numele canalului (↑/↓ pe video). `wait`: bară care se golește până la comutarea automată."""
+        self.cmd("script-message", "teleops-epg-hide")
+        self.cmd("script-message", "teleops-banner", text, str(ms), "1" if wait else "0")
+
+    def hide_banner(self):
+        self.cmd("script-message", "teleops-banner", "", "0", "0")
+
     def toast(self, text, ms):
         """Mesaj scurt de text (volum, mute, notificări). Ascunde panoul EPG, ca să nu se suprapună."""
         self.cmd("script-message", "teleops-epg-hide")
@@ -3115,17 +3539,54 @@ class Streamer:
 
 VOL_MAX = 130           # volume-max implicit în mpv
 VOL_WHEEL_STEP = 5      # procente de volum la fiecare „clic” al rotiței de mouse de pe video
-TXT_DARK = "#000000"    # culoare text implicită
+# Paletă Dark / Slate Hi-Fi (din darkmode.py), asortată cu rotițele retro, grila de difuzor și LED-urile portocalii.
+# Tema luminoasă este aspectul original: nu are culori proprii aici, folosește implicitele Tk/ttk.
+BG_SLATE = "#2b2d30"       # fundal principal (panou, listă, câmpuri)
+BG_PANEL = "#33363a"       # suprafețe secundare (butoane, câmpuri de introducere, tab-uri)
+BG_DARK = "#202225"        # fundal închis (chenare, zonă video, antete)
+BORDER_SLATE = "#46494e"   # contururi discrete și separatoare
+TXT_LIGHT = "#e6e6e6"      # text principal
+TXT_MUTED = "#9ea3ab"      # text secundar / subtitluri
+ACCENT_LED = "#e8902c"     # portocaliu LED retro (selecție, accente, progres)
+ACCENT_HOVER = "#42464c"   # hover pe controale
+ON_ACCENT = "#18191b"      # text pe fundal portocaliu
+THEME_MODES = ("light", "dark", "auto")
+DARK = False               # tema activă (o schimbă `set_dark`)
+TXT_DARK = "#000000"       # culoare text implicită (în tema întunecată devine TXT_LIGHT)
+
+
+def set_dark(flag):
+    """Comută paleta: restul codului citește `DARK` / `TXT_DARK` în momentul în care desenează."""
+    global DARK, TXT_DARK
+    DARK = bool(flag)
+    TXT_DARK = TXT_LIGHT if DARK else "#000000"
+
+
+def themed(light, dark):
+    """Valoarea pentru tema activă."""
+    return dark if DARK else light
+
+
 TONE_MAX = 10           # joase / înalte: ±10 dB
 LIST_MIN_H = 150        # înălțimea minimă (px) a listei de canale la strângerea ferestrei
 CFG_W, CFG_GAP = 36, 5     # lățimea butonului ⚙ și spațiul dintre el și butonul EPG
 PANEL_W = 320           # lățimea fixă a panoului cu comenzi
+TUNER_W = PANEL_W       # lățimea fixă a ferestrei „Tuner TV” (aceeași cu a panoului: butoane de aceeași mărime)
+CH_PICK_MS = 3000       # ↑/↓ pe video: după câte ms fără altă tastă pornește canalul ales (Enter îl pornește imediat)
+INFO_W = PANEL_W - 28   # lățimea utilă în vederea „informații” (panoul are padding 14 pe fiecare parte)
+POSTER_H = 420          # înălțimea MAXIMĂ a zonei de poster; un poster mai scurt ocupă doar cât are el (zona se strânge după el).
+                        # Nu depinde de mărimea ferestrei: posterul nu se scalează la redimensionare.
+POSTER_PAD = 10         # distanța posterului față de marginea de sus a zonei
+LOGO_H = 96             # înălțimea FIXĂ a zonei de logo (lipit jos, deasupra barei de separare)
 VIDEO_MIN_W = 480       # lățimea minimă a zonei video
 
 HOTKEYS = (("hk_play", "hk_play_k"), ("hk_fav", "hk_fav_k"), ("hk_search", "hk_search_k"),      # lista de canale
            ("hk_jump", "hk_jump_k"), ("hk_prev", "hk_prev_k"), ("hk_info", "hk_info_k"),
            ("hk_epg", "hk_epg_k"), ("hk_epgwin", "hk_epgwin_k"), ("hk_rec", "hk_rec_k"),                                      # canalul curent
            ("hk_osc", "hk_osc_k"), ("hk_vol", "hk_vol_k"), ("hk_knob", "hk_knob_k"), ("hk_mute", "hk_mute_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),   # video
+           ("hk_chan", "hk_chan_k"), ("hk_volkeys", "hk_volkeys_k"),                                                   # video: canal / volum cu tastele
+           ("hk_ts_pause", "hk_ts_pause_k"), ("hk_ts_seek", "hk_ts_seek_k"), ("hk_ts_live", "hk_ts_live_k"),
+           ("hk_ts_bar", "hk_ts_bar_k"),                                                                               # video: Timeshift
            ("hk_quit", "hk_quit_k"))                                                            # program
 
 
@@ -3185,7 +3646,7 @@ class ChannelList(tk.Text):
 
     def __init__(self, master, **kw):
         probe = tk.Listbox(master)
-        sel_bg, sel_fg = probe.cget("selectbackground"), probe.cget("selectforeground")
+        self._light_sel = (probe.cget("selectbackground"), probe.cget("selectforeground"))
         probe.destroy()
         kw.setdefault("width", 1)
         kw.setdefault("height", 1)
@@ -3193,8 +3654,7 @@ class ChannelList(tk.Text):
                          borderwidth=0, takefocus=True, **kw)
         self.selectable = []
         self.tag_configure("title", justify="center", underline=True)
-        self.tag_configure("locked", foreground="#dc2626")      # canale codate: text maro-roșiatic
-        self.tag_configure("cur", background=sel_bg, foreground=sel_fg)
+        self._paint_tags()
         self.tag_raise("cur")
         # fără bindingurile implicite ale lui Text (editare, selecție cu mouse-ul)
         self.bindtags((str(self), str(self.winfo_toplevel()), "all"))
@@ -3204,6 +3664,17 @@ class ChannelList(tk.Text):
         self.bind("<MouseWheel>", self._wheel)
         self.bind("<Button-4>", self._wheel)
         self.bind("<Button-5>", self._wheel)
+
+    def _paint_tags(self):
+        sel_bg, sel_fg = themed(self._light_sel, (ACCENT_LED, ON_ACCENT))
+        self.tag_configure("title", foreground=ACCENT_LED if DARK else "")
+        self.tag_configure("locked", foreground=themed("#dc2626", "#f87171"))     # canale codate: roșu
+        self.tag_configure("cur", background=sel_bg, foreground=sel_fg)
+
+    def retheme(self, bg):
+        """Schimbarea temei: fundalul listei (cel al panoului), culoarea textului și etichetele."""
+        self.configure(bg=bg, fg=TXT_DARK)
+        self._paint_tags()
 
     def clear(self):
         self.delete("1.0", "end")
@@ -3267,7 +3738,8 @@ class Tip:
         self.tw = tk.Toplevel(self.w)
         self.tw.wm_overrideredirect(True)
         self.tw.wm_geometry(f"+{self.w.winfo_rootx()}+{self.w.winfo_rooty() + self.w.winfo_height() + 4}")
-        tk.Label(self.tw, text=self.text, background="#ffffe0", foreground="#000000", relief="solid", borderwidth=1,
+        tk.Label(self.tw, text=self.text, background=themed("#ffffe0", BG_DARK), foreground=themed("#000000", TXT_LIGHT),
+                 relief="solid", borderwidth=1, padx=themed(1, 6), pady=themed(1, 4),
                  wraplength=self.wrap, justify="left").pack()
 
     def hide(self, _=None):
@@ -3429,23 +3901,32 @@ def hm(ts):
 class EpgWindow(tk.Toplevel):
     """`host` = fereastra principală; folosim doar: root, t(), lang, cur, stream, bg_grey, f_norm, f_bold, epg_events(),
     is_scheduled(start, end), schedule_toggle(start, end, titlu) (+ last_dropped la „added_over”),
-    is_watch(start, end), watch_toggle(start, end, titlu) (+ last_conflict la „conflict”)."""
+    is_watch(start, end), watch_toggle(start, end, titlu) (+ last_conflict la „conflict”),
+    my_schedules(), cancel_schedule(kind, job), clear_schedules() (fila „Programările mele”)."""
 
     def __init__(self, host):
         super().__init__(host.root)
         self.title(host.t("epg_btn"))
-        self.geometry("640x580")
-        self.minsize(600, 540)
+        self.geometry("640x630")
+        self.minsize(600, 590)
 
         st = ttk.Style()
         st.configure("Epg.Treeview", background=host.bg_grey, fieldbackground=host.bg_grey,
                      foreground=TXT_DARK, font=host.f_norm)
-        st.configure("Epg.Treeview.Heading", font=host.f_bold)
-        st.map("Epg.Treeview", background=[("selected", "#4a6984")], foreground=[("selected", "#ffffff")])
+        if DARK:
+            st.configure("Epg.Treeview.Heading", background=BG_PANEL, foreground=ACCENT_LED, font=host.f_bold)
+            st.map("Epg.Treeview", background=[("selected", ACCENT_LED)], foreground=[("selected", ON_ACCENT)])
+        else:
+            st.configure("Epg.Treeview.Heading", font=host.f_bold)
+            st.map("Epg.Treeview", background=[("selected", "#4a6984")], foreground=[("selected", "#ffffff")])
         self.configure(bg=host.bg_grey)
 
-        mf = ttk.Frame(self, padding=10)
-        mf.pack(fill="both", expand=True)
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=8, pady=8)
+        mf = ttk.Frame(nb, padding=10)          # fila 1: programul canalului curent
+        my = ttk.Frame(nb, padding=10)          # fila 2: toate programările mele
+        nb.add(mf, text=host.t("epg_tab_prog"))
+        nb.add(my, text=host.t("epg_tab_my"))
 
         t_frame = ttk.Frame(mf)
         t_frame.pack(fill="both", expand=True, pady=(0, 10))
@@ -3558,9 +4039,84 @@ class EpgWindow(tk.Toplevel):
             "Italiano": ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"]
         }
 
+        # ── fila „Programările mele”: toate înregistrările și vizionările programate (care n-au pornit încă), la un loc
+        my_frame = ttk.Frame(my)
+        my_frame.pack(fill="both", expand=True, pady=(0, 10))
+        my_tree = ttk.Treeview(my_frame, columns=("type", "channel", "date", "time", "title"), show="headings",
+                               selectmode="browse", style="Epg.Treeview")
+        for col, key, width in (("type", "my_col_type", 105), ("channel", "my_col_channel", 105), ("date", "epg_date", 75),
+                                ("time", "epg_time", 95), ("title", "epg_title", 190)):
+            my_tree.heading(col, text=host.t(key))
+            my_tree.column(col, width=width, minwidth=60, anchor="w")
+        my_sb = ttk.Scrollbar(my_frame, orient="vertical", command=my_tree.yview)
+        my_tree.configure(yscrollcommand=my_sb.set)
+        my_tree.pack(side="left", fill="both", expand=True)
+        my_sb.pack(side="right", fill="y")
+        my_row = ttk.Frame(my)
+        my_row.pack(fill="x", pady=(0, 4))
+        del_btn = ttk.Button(my_row, text=host.t("my_delete"))
+        del_btn.pack(side="left")
+        clear_btn = ttk.Button(my_row, text=host.t("my_clear"))
+        clear_btn.pack(side="left", padx=(8, 0))
+        my_hint = ttk.Label(my, text="", wraplength=600, justify="left")        # „nicio programare”
+        my_hint.pack(fill="x", pady=(0, 4))
+        my_status = ttk.Label(my, text="", wraplength=600, justify="left")      # rezultatul ultimei ștergeri
+        my_status.pack(fill="x")
+        my_map = {}                 # id rând -> (tip, job)
+
+        def my_buttons():
+            sel = my_tree.selection()
+            del_btn.state(["!disabled"] if sel and sel[0] in my_map else ["disabled"])
+            clear_btn.state(["!disabled"] if my_map else ["disabled"])
+
+        def delete_one():
+            sel = my_tree.selection()
+            if not sel or sel[0] not in my_map:
+                return
+            kind, job = my_map[sel[0]]
+            host.cancel_schedule(kind, job)
+            my_status.configure(text=host.t("my_deleted"))
+            render()
+
+        def clear_all():
+            if not my_map:
+                return
+            if not messagebox.askyesno(host.t("epg_tab_my"), host.t("my_clear_confirm"), icon="warning", default="no", parent=self):
+                return
+            host.clear_schedules()
+            my_status.configure(text=host.t("my_cleared"))
+            render()
+
+        del_btn.configure(command=delete_one)
+        clear_btn.configure(command=clear_all)
+        my_tree.bind("<<TreeviewSelect>>", lambda e: my_buttons())
+        my_tree.bind("<Delete>", lambda e: delete_one())
+
+        def render_my():
+            sel = my_tree.selection()
+            sel_key = (my_map[sel[0]][0], my_map[sel[0]][1].key) if sel and sel[0] in my_map else None
+            for item in my_tree.get_children():
+                my_tree.delete(item)
+            my_map.clear()
+            for kind, job in host.my_schedules():
+                dt = datetime.fromtimestamp(job.start)
+                day_name = days_dict.get(host.lang, days_dict["Română"])[dt.weekday()]
+                iid = my_tree.insert("", "end", values=(host.t("my_rec" if kind == "rec" else "my_watch"), job.channel.strip(),
+                                                        f"{day_name} {dt.day:02d}.{dt.month:02d}",
+                                                        f"{hm(job.start)}–{hm(job.end)}", job.title))
+                my_map[iid] = (kind, job)
+            kids = my_tree.get_children()
+            if kids:
+                keep = next((k for k in kids if sel_key == (my_map[k][0], my_map[k][1].key)), None)
+                if keep:
+                    my_tree.selection_set(keep)
+            my_hint.configure(text="" if kids else host.t("my_empty"))
+            my_buttons()
+
         def render():
             if not self.winfo_exists():
                 return
+            render_my()
             current_sel = tree.selection()
             sel_key = ev_map[current_sel[0]][:2] if current_sel and current_sel[0] in ev_map else None
 
@@ -3603,6 +4159,8 @@ class EpgWindow(tk.Toplevel):
             render()
             self.after(3000, refresh)
 
+        if not host.stream and host.my_schedules():          # fără redare, programul canalului e gol: începem cu programările
+            nb.select(my)
         refresh()
 
 
@@ -3682,6 +4240,9 @@ class MpvDialog(tk.Toplevel):
             w = self._make_slider(tab, o, var)
         elif o.kind == "multiline":
             w = tk.Text(tab, width=46, height=6, wrap="none", undo=True)
+            if DARK:
+                w.configure(bg=BG_DARK, fg=TXT_LIGHT, insertbackground=ACCENT_LED, selectbackground=ACCENT_LED,
+                            selectforeground=ON_ACCENT, highlightthickness=1, highlightbackground=BORDER_SLATE, relief="flat")
         else:
             w = ttk.Entry(tab, textvariable=var, width=46)
         w.grid(row=r, column=1, sticky="w", pady=4)
@@ -3936,7 +4497,9 @@ class AboutDialog(tk.Toplevel):
         w, h = f.measure(text) + 12, f.metrics("linespace") + 10
         cv = tk.Canvas(parent, width=w, height=h, bg=bg, highlightthickness=0)
         cx, cy = w // 2 - 1, h // 2 - 1
-        for dx, dy, col in ((2, 2, "#ffffff"), (1, 1, "#ffffff"), (-1, -1, "#9a9a9a"), (0, 0, "#4f4f4f")):
+        layers = ((2, 2, "#141517"), (1, 1, "#18191c"), (-1, -1, "#4c5057"), (0, 0, "#d8dadf")) if DARK else \
+                 ((2, 2, "#ffffff"), (1, 1, "#ffffff"), (-1, -1, "#9a9a9a"), (0, 0, "#4f4f4f"))
+        for dx, dy, col in layers:
             cv.create_text(cx + dx, cy + dy, text=text, font=f, fill=col)
         return cv
 
@@ -3945,6 +4508,93 @@ def fold(s):
     """Text fără diacritice și majuscule (căutarea găsește «Pro TV» și cu «pro tv», «Știri» cu «stiri»)."""
     return "".join(c for c in unicodedata.normalize("NFD", s.casefold()) if not unicodedata.combining(c))
 
+
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECȚIUNE ui/tuner_window
+#   Fereastra „Tuner TV”: alegerea tunerului, scanările de canale (cablu / antenă) și detectarea canalelor codate.
+#
+#   Fereastră cu dimensiuni fixe (lățimea panoului principal, ca butoanele să fie la fel de late), creată o singură dată
+#   și doar ascunsă / arătată: widgeturile ei (adapter, butoanele de scanare, bara de progres) rămân ale ferestrei
+#   principale, care le folosește ca înainte. Zona barei de progres e rezervată, deci fereastra nu se mărește la scanare.
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TunerWindow(tk.Toplevel):
+    """`host` = fereastra principală; folosim: root, t(), tr, bg_grey, f_norm, detect_tuners(), update_scan_buttons(),
+    start_scan(mod), cancel_scan(), start_ca_detect()."""
+
+    def __init__(self, host):
+        super().__init__(host.root)
+        self.host = host
+        self.withdraw()
+        self.title(host.t("tuner_title"))
+        self.configure(bg=host.bg_grey)
+        self.resizable(False, False)
+        self.transient(host.root)
+        self.protocol("WM_DELETE_WINDOW", self.hide)
+        self.bind("<Escape>", lambda e: self.hide())
+
+        mf = ttk.Frame(self, padding=14)
+        mf.pack(fill="both", expand=True)
+        self.close_btn = self._btn(mf, "tuner_close", self.hide, side="bottom")      # primul împachetat: rămâne jos
+
+        lrow = ttk.Frame(mf)
+        lrow.pack(fill="x", pady=5)
+        refresh = ttk.Button(lrow, text="↻", width=2, command=host.detect_tuners)
+        refresh.pack(side="left", padx=(0, 6))
+        self.refresh_tip = Tip(refresh, "")
+        tl = ttk.Label(lrow)
+        tl.pack(side="left")
+        host.tr.append((tl, "tuner_label"))
+        self.adapter = ttk.Combobox(mf, state="readonly", font=host.f_norm)
+        self.adapter.bind("<<ComboboxSelected>>", lambda e: host.update_scan_buttons())
+        self.adapter.pack(fill="x", pady=5)
+
+        self.scan_c_btn = self._btn(mf, "scan_c", lambda: host.start_scan("dvbc"))
+        self.scan_t_btn = self._btn(mf, "scan_t", lambda: host.start_scan("dvbt"))
+        self.ca_btn = self._btn(mf, "ca_btn", host.start_ca_detect)
+
+        self.scan_zone = ttk.Frame(mf)        # aici apar bara de progres și „Anulează scanarea”
+        self.scan_zone.pack(fill="x")
+        self.progress_bar = ttk.Progressbar(self.scan_zone, mode="indeterminate")
+        self.cancel_btn = ttk.Button(self.scan_zone, text=host.t("scan_cancel"), command=host.cancel_scan)
+        host.tr.append((self.cancel_btn, "scan_cancel"))
+
+        # dimensiunea fixă: cât încape tot, cu bara de progres și „Anulează” afișate (apoi le ascundem, zona rămâne rezervată)
+        self.progress_bar.pack(fill="x", pady=5)
+        self.cancel_btn.pack(fill="x", pady=(0, 5))
+        self.update_idletasks()
+        self.scan_zone.configure(height=self.scan_zone.winfo_reqheight())
+        self.scan_zone.pack_propagate(False)
+        self.progress_bar.pack_forget()
+        self.cancel_btn.pack_forget()
+        self.update_idletasks()
+        self.height = self.winfo_reqheight()
+
+    def _btn(self, parent, key, cmd, side="top"):
+        w = ttk.Button(parent, text=self.host.t(key), command=cmd)
+        w.pack(side=side, fill="x", pady=5)
+        self.host.tr.append((w, key))
+        return w
+
+    def show(self):
+        r = self.host.root
+        r.update_idletasks()
+        x = r.winfo_rootx() + max(0, (r.winfo_width() - TUNER_W) // 2)
+        y = r.winfo_rooty() + 60
+        h = self.height + 20
+        self.geometry(f"{TUNER_W}x{h}+{x}+{y}")
+        self.deiconify()
+        self.lift()
+        self.focus_set()
+
+    def hide(self):
+        self.withdraw()
+
+    def is_open(self):
+        return self.winfo_exists() and self.state() != "withdrawn"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -3973,7 +4623,6 @@ TMDB_LANG = {"RO": "ro-RO", "MD": "ro-RO", "IT": "it-IT", "GB": "en-GB", "DE": "
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 NEWS = re.compile(r"\b(stiri(le|lor)?|stire(a)?|news|notizie|telegiornale|tg\s?\d?|rainews\d*|"
                   r"observator|focus|telejurnal(ul)?|jurnal(ul)?|ultima ora|breaking)\b")        # emisiuni de știri: în loc de poster se desenează un afiș (după titlu)
-NONMOVIE = re.compile(r"\b(stiri|jurnal|telejurnal|meteo|buletin|reclam\w*|teleshopping|sport\w*|emisiune|talk|magazin|concert|muzic\w*|dezbatere|news)\b")
 
 
 def mlog(msg, *args):
@@ -4182,6 +4831,7 @@ class MediaLookup:
         self.lock, self.tmdb_key = threading.Lock(), (tmdb_key or "").strip()
         self.logos, self.logos_fail, self.glob = {}, {}, None
         self._logo_miss = {}
+        self._logo_site = {}                     # (nume normalizat, țară) -> site-ul canalului, găsit odată cu logo-ul
         self.posters = {}
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -4242,16 +4892,16 @@ class MediaLookup:
                 continue
             names = [c.get("name", "")] + list(c.get("alt_names") or [])
             if c.get("country") == cc:
-                items.append({"n": names, "u": url})
+                items.append({"n": names, "u": url, "w": c.get("website") or ""})
             for n in names:
                 for v in name_variants(n):
-                    glob.setdefault(v, []).append([c.get("country") or "", url])
+                    glob.setdefault(v, []).append([c.get("country") or "", url, c.get("website") or ""])
         try:
             (CACHE_DIR / f"logos_{cc}.json").write_text(
-                json.dumps({"v": 3, "ts": time.time(), "items": items}), encoding="utf-8"
+                json.dumps({"v": 4, "ts": time.time(), "items": items}), encoding="utf-8"
             )
             (CACHE_DIR / "logos_all.json").write_text(
-                json.dumps({"v": 3, "ts": time.time(), "g": glob}), encoding="utf-8"
+                json.dumps({"v": 4, "ts": time.time(), "g": glob}), encoding="utf-8"
             )
         except OSError:
             pass
@@ -4272,7 +4922,7 @@ class MediaLookup:
             gfile = CACHE_DIR / "logos_all.json"
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
-                if time.time() - d.get("ts", 0) < 30 * 86400 and d.get("v") == 3 and gfile.exists():
+                if time.time() - d.get("ts", 0) < 30 * 86400 and d.get("v") == 4 and gfile.exists():
                     items = d["items"]
                     for it in items:
                         it["v"] = set().union(*(name_variants(n) for n in it["n"]))
@@ -4286,7 +4936,7 @@ class MediaLookup:
         if self.glob is None:
             try:
                 d = json.loads((CACHE_DIR / "logos_all.json").read_text(encoding="utf-8"))
-                self.glob = d["g"] if d.get("v") == 3 else {}
+                self.glob = d["g"] if d.get("v") == 4 else {}
             except (OSError, ValueError, KeyError, TypeError):
                 self.glob = {}
         return self.glob
@@ -4312,6 +4962,7 @@ class MediaLookup:
                 hit = None
         if hit:
             mlog("logo '%s' (%s): găsit în țară -> %s", channel, cc, hit["u"])
+            self._logo_site[mkey] = hit.get("w") or ""
             img = self.fetch_image(hit["u"])
             if img:
                 return img
@@ -4319,9 +4970,11 @@ class MediaLookup:
         for v in sorted(q, key=len, reverse=True):
             c = g.get(v)
             if c:
-                url = (next((u for k, u in c if k == cc), None)
-                       or next((u for k, u in c if k == "RO"), None)
-                       or c[0][1])
+                best = (next((e for e in c if e[0] == cc), None)
+                        or next((e for e in c if e[0] == "RO"), None)
+                        or c[0])
+                url = best[1]
+                self._logo_site[mkey] = best[2] if len(best) > 2 else ""
                 mlog("logo '%s' (%s): găsit în indexul global -> %s", channel, cc, url)
                 img = self.fetch_image(url)
                 if img:
@@ -4329,6 +4982,10 @@ class MediaLookup:
         self._logo_miss[mkey] = time.time()
         mlog("logo '%s' (%s): negăsit (variante: %s)", channel, cc, sorted(q))
         return None
+
+    def logo_site(self, channel, cc):
+        """Site-ul canalului (din iptv-org), găsit la ultima căutare de logo; \"\" dacă nu e cunoscut."""
+        return self._logo_site.get((norm_name(channel), cc), "")
 
     # ---- poster
     def _imdb(self, q, year, genre):
@@ -4362,10 +5019,8 @@ class MediaLookup:
         return None
 
     def _imdb_find(self, q, year, genre):
-        """Căutarea de pe site-ul IMDb (aceeași ca în browser, găsește și titlurile traduse). Doar pentru filme."""
-        if genre not in (None, 1):
-            return None
-        raw = http_get("https://www.imdb.com/find/?s=tt&ttype=ft&q=" + urllib.parse.quote(q), 12,
+        """Căutarea de pe site-ul IMDb (aceeași ca în browser, găsește și titlurile traduse)."""
+        raw = http_get("https://www.imdb.com/find/?s=tt&q=" + urllib.parse.quote(q), 12,
                        headers={"Accept": "text/html", "Accept-Language": "ro,en;q=0.8"})
         m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', (raw or b"").decode("utf-8", "ignore"), re.S)
         if not m:
@@ -4392,28 +5047,28 @@ class MediaLookup:
 
     def _apple(self, q, year, genre, cc="RO"):
         """Caută postere în catalogul Apple/iTunes Search API (întâi magazinul țării alese, apoi US dacă nu găsește)."""
-        media = "movie" if genre in (None, 1) else "tvShow"
-        entity = "movie" if media == "movie" else "tvSeason"
+        targets = [("movie", "movie")] if genre == 1 else [("tvShow", "tvSeason"), ("movie", "movie")]
         qn = norm_name(q)
-        for store in dict.fromkeys((cc.lower(), "us")):
-            params = urllib.parse.urlencode({"term": q, "media": media, "entity": entity, "country": store, "limit": 25})
-            raw = http_get("https://itunes.apple.com/search?" + params, 10)
-            if not raw:
-                continue
-            try:
-                res = json.loads(raw).get("results", [])
-            except (ValueError, AttributeError, TypeError):
-                continue
-            mlog("Apple-%s '%s': %s", store.upper(), q, [r.get("trackName") or r.get("collectionName") for r in res[:3]])
-            for i, r in enumerate(res):
-                name = r.get("trackName") or r.get("collectionName") or ""
-                sim = difflib.SequenceMatcher(None, qn, norm_name(name)).ratio()
-                ry = int((r.get("releaseDate") or "0")[:4] or 0)
-                if sim >= 0.75 or (year and ry == year and sim >= 0.48) or (genre == 1 and i == 0 and sim >= 0.48):
-                    img = r.get("artworkUrl600") or r.get("artworkUrl100")
-                    if img:
-                        img = re.sub(r"\d+x\d+bb", "600x900bb", img)
-                        return {"imdb": None, "img": img, "source": f"Apple-{store.upper()}"}
+        for media, entity in targets:
+            for store in dict.fromkeys((cc.lower(), "us")):
+                params = urllib.parse.urlencode({"term": q, "media": media, "entity": entity, "country": store, "limit": 25})
+                raw = http_get("https://itunes.apple.com/search?" + params, 10)
+                if not raw:
+                    continue
+                try:
+                    res = json.loads(raw).get("results", [])
+                except (ValueError, AttributeError, TypeError):
+                    continue
+                mlog("Apple-%s (%s) '%s': %s", store.upper(), media, q, [r.get("trackName") or r.get("collectionName") for r in res[:3]])
+                for i, r in enumerate(res):
+                    name = r.get("trackName") or r.get("collectionName") or ""
+                    sim = difflib.SequenceMatcher(None, qn, norm_name(name)).ratio()
+                    ry = int((r.get("releaseDate") or "0")[:4] or 0)
+                    if sim >= 0.75 or (year and ry == year and sim >= 0.48) or (i == 0 and sim >= 0.55):
+                        img = r.get("artworkUrl600") or r.get("artworkUrl100")
+                        if img:
+                            img = re.sub(r"\d+x\d+bb", "600x900bb", img)
+                            return {"imdb": None, "img": img, "source": f"Apple-{store.upper()}"}
         return None
 
     def _tvmaze(self, q, year):
@@ -4501,7 +5156,7 @@ class MediaLookup:
                 pass
         link = hit.get("imdb") or (
             "https://www.imdb.com/find/?s=tt&q=" + urllib.parse.quote(q)
-            if hit is not None and genre in (None, 1) else None
+            if hit is not None else None
         )
         img_bytes = self.fetch_image(hit["img"], keep=False) if hit.get("img") else None
         if hit.get("img") and not img_bytes:
@@ -4774,36 +5429,49 @@ def _speaker_png(D):
 
 
 class SpeakerGrille(tk.Canvas):
-    """Difuzorul retro cu grilaj + plăcuța „Teleops DVB” dedesubt. Are MĂRIME FIXĂ (nu se redimensionează niciodată) și
-    se desenează pe mijloc, pe orizontală și pe verticală. Canvasul cere exact cât ocupă difuzorul + plăcuța, așa că
+    """Difuzorul retro cu grilaj, cu emblema „Teleops DVB” pusă pe mijlocul lui, ca o plăcuță metalică argintie (aceleași
+    nuanțe ca inelul difuzorului) prinsă cu două nituri. Are MĂRIME FIXĂ (nu se redimensionează niciodată), centrat doar
+    pe orizontală și lipit sus (sub bara de separare). Canvasul cere exact cât ocupă difuzorul, așa că
     `Main.fit_min_height` nu lasă fereastra să se micșoreze până să-l taie. Imaginea se generează abia la prima afișare."""
     TEXT = "Teleops DVB"
-    SIZE, PLATE_H, GAP, MARGIN = 200, 18, 8, 10
+    SIZE, PLATE_H, MARGIN = 200, 24, 10
+    TOTAL_H = SIZE + 2 * MARGIN                      # înălțimea fixă a difuzorului (emblema e peste el, nu adaugă înălțime)
 
     def __init__(self, master, bg):
         super().__init__(master, bg=bg, highlightthickness=0,
-                         height=self.SIZE + self.GAP + self.PLATE_H + 2 * self.MARGIN)     # înălțimea cerută = minimul
+                         height=self.TOTAL_H)     # înălțimea cerută = minimul
         self._img = None
-        self._tf = tkfont.Font(family="DejaVu Sans", size=-11, weight="bold")
+        self._tf = tkfont.Font(family="DejaVu Sans", size=-12, weight="bold")
         self.bind("<Configure>", lambda e: self._draw(e.width, e.height))
+
+    @staticmethod
+    def _grey(v):
+        v = max(0, min(255, int(v)))
+        return f"#{v:02x}{v:02x}{min(255, v + 3):02x}"
 
     def _draw(self, w, h):
         if self._img is None:
             self._img = tk.PhotoImage(master=self, data=_speaker_png(self.SIZE))
         self.delete("all")
-        D = self.SIZE
-        top = max(0, (h - (D + self.GAP + self.PLATE_H)) / 2)                                    # bloc centrat pe verticală
+        top = self.MARGIN                                                                        # difuzor lipit sus, nu centrat
         self.create_image(w / 2, top, image=self._img, anchor="n")
-        pw, ph = self._tf.measure(self.TEXT) + 24, self.PLATE_H
-        x0, y0 = (w - pw) / 2, top + D + self.GAP
-        self.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="#b9babd", outline="#5c5d60")
-        self.create_line(x0 + 1, y0 + 1, x0 + pw - 1, y0 + 1, fill="#e8e9ec")                    # muchie luminată sus
-        self.create_line(x0 + 1, y0 + ph - 1, x0 + pw - 1, y0 + ph - 1, fill="#8d8e92")          # umbră jos
-        for sx in (x0 + 6, x0 + pw - 6):                                                         # două nituri mici
-            self.create_oval(sx - 1.6, y0 + ph / 2 - 1.6, sx + 1.6, y0 + ph / 2 + 1.6, fill="#55575a", outline="#e0e1e4")
-        cx, cy = w / 2, y0 + ph / 2
-        self.create_text(cx + 1, cy + 1, text=self.TEXT, font=self._tf, fill="#eef0f2")          # text gravat
-        self.create_text(cx, cy, text=self.TEXT, font=self._tf, fill="#34353a")
+        cx, cy = w / 2, top + self.SIZE / 2                                                      # emblema, pe mijlocul difuzorului
+        pw, ph = self._tf.measure(self.TEXT) + 34, self.PLATE_H
+        x0, y0 = cx - pw / 2, cy - ph / 2
+        self.create_rectangle(x0 + 2, y0 + 3, x0 + pw + 2, y0 + ph + 3, fill="#050506", outline="")   # umbra pe grilaj
+        for i in range(ph):                                                                      # față argintie cu degrade vertical
+            self.create_line(x0, y0 + i, x0 + pw, y0 + i, fill=self._grey(218 - 52 * i / (ph - 1)))
+        self.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="", outline="#2e2f32")              # contur închis
+        self.create_line(x0 + 1, y0 + 1, x0 + pw - 1, y0 + 1, fill="#f4f5f7")                    # muchie luminată sus
+        self.create_line(x0 + 1, y0 + 1, x0 + 1, y0 + ph - 1, fill="#e6e7ea")                    # și în stânga (lumina vine din stânga-sus)
+        self.create_line(x0 + 1, y0 + ph - 1, x0 + pw - 1, y0 + ph - 1, fill="#76777b")          # umbră jos
+        self.create_line(x0 + pw - 1, y0 + 1, x0 + pw - 1, y0 + ph - 1, fill="#86878b")          # și în dreapta
+        for sx in (x0 + 8, x0 + pw - 8):                                                         # două nituri, ca șuruburile inelului
+            self.create_oval(sx - 3, cy - 3, sx + 3, cy + 3, fill="#8d8e92", outline="#3a3b3e")
+            self.create_oval(sx - 1.8, cy - 1.8, sx + 1.8, cy + 1.8, fill="#242426", outline="")
+            self.create_line(sx - 2, cy + 3.6, sx + 2, cy + 3.6, fill="#f0f1f3")                 # reflexie mică dedesubt
+        self.create_text(cx + 1, cy + 1, text=self.TEXT, font=self._tf, fill="#f2f3f5")          # text gravat
+        self.create_text(cx, cy, text=self.TEXT, font=self._tf, fill="#2c2d31")
 
 
 class JumpDialog(tk.Frame):
@@ -4813,17 +5481,22 @@ class JumpDialog(tk.Frame):
     ROWS, W = 8, 400
 
     def __init__(self, host, items):
-        super().__init__(host.root, bg="#555555", padx=2, pady=2)
+        super().__init__(host.root, bg=themed("#555555", ACCENT_LED), padx=2, pady=2)
         self.host, self.items, self.shown, self._closed = host, items, [], False
         bg = host.bg_grey
         body = tk.Frame(self, bg=bg, padx=10, pady=10)
         body.pack(fill="both", expand=True)
-        tk.Label(body, text=host.t("jump_title"), font=host.f_bold, bg=bg, fg=TXT_DARK, anchor="w").pack(fill="x")
+        tk.Label(body, text=host.t("jump_title"), font=host.f_bold, bg=bg, fg=themed(TXT_DARK, ACCENT_LED), anchor="w").pack(fill="x")
         big = tkfont.Font(font=host.f_norm)
         big.configure(size=-17)
         self.var = tk.StringVar()
-        self.entry = tk.Entry(body, textvariable=self.var, font=big, bg="#ffffff", fg=TXT_DARK,
-                              insertbackground=TXT_DARK, relief="solid", bd=1)
+        if DARK:
+            self.entry = tk.Entry(body, textvariable=self.var, font=big, bg=BG_DARK, fg=TXT_LIGHT,
+                                  insertbackground=ACCENT_LED, selectbackground=ACCENT_LED, selectforeground=ON_ACCENT,
+                                  highlightthickness=1, highlightbackground=BORDER_SLATE, relief="flat")
+        else:
+            self.entry = tk.Entry(body, textvariable=self.var, font=big, bg="#ffffff", fg=TXT_DARK,
+                                  insertbackground=TXT_DARK, relief="solid", bd=1)
         self.entry.pack(fill="x", pady=(6, 6), ipady=3)
         self.lb = tk.Listbox(body, height=self.ROWS, width=self.W // 8, font=host.f_norm, bg=bg, fg=TXT_DARK,
                              activestyle="none", exportselection=False, highlightthickness=0, relief="flat",
@@ -4909,9 +5582,9 @@ class JumpDialog(tk.Frame):
         if hits:
             self.lb.selection_set(0)
             self.lb.activate(0)
-            self.status.configure(text="↑ ↓     Enter     Esc", fg="#666666")
+            self.status.configure(text="↑ ↓     Enter     Esc", fg=themed("#666666", TXT_MUTED))
         else:
-            self.status.configure(text=self.host.t("jump_none"), fg="#dc2626")
+            self.status.configure(text=self.host.t("jump_none"), fg=themed("#dc2626", "#f87171"))
 
     def move(self, d):
         if self.shown:
@@ -4970,12 +5643,14 @@ class Main:
         self.stream, self.tv_channels, self.radio_channels, self.cur, self.scan_proc = None, [], [], None, None
         self.scan_active, self.scan_cancelled = False, False
         self.rec_on, self._ph_active, self.epg_win = False, False, None
+        self._pick, self._pick_job = None, None         # canalul ales cu ↑/↓ de pe video și comutarea lui programată
         self.rec_t0, self.muted = 0, bool(self.settings.get("muted", False))
         self.volume = max(0, min(int(self.settings.get("volume", 100)), VOL_MAX))
         self.adapter_items, self.tr = [], []
         self._autoplay_done = False
         self.info_mode, self._info_key, self._logo_tok, self._poster_tok = False, None, 0, 0
         self._logo_img = self._poster_img = None
+        self._logo_link = None                   # pagina deschisă la click pe logo
         self._poster_raw = self._poster_link = None
         self._poster_title = ""
         self._news = False
@@ -5039,27 +5714,30 @@ class Main:
         self.f_norm, self.f_bold, f_brand = font(-13, "normal"), font(-13, "bold"), font(-18, "bold")
         self.f_load, self.f_hk, self.f_hkb = font(-22, "bold"), font(-11, "normal"), font(-11, "bold")
         
-        st = ttk.Style()
+        st = self.st = ttk.Style()
+        self.f_brand = f_brand
+        self._themed, self._combos, self._dark_seen = [], [], False
         st.theme_use("default")
-        
-        st.configure("TLabel", font=self.f_bold)
-        st.configure("Brand.TLabel", font=f_brand, foreground="#555555")   # aceeași culoare ca mesajul „Se încarcă...”
-        st.configure("Rec.TLabel", font=self.f_bold, foreground="#dc2626")
-        st.configure("Epg.TLabel", font=self.f_norm)
-        st.configure("EpgB.TLabel", font=self.f_bold)
-        st.configure("Hk.TLabel", font=self.f_hk)
-        st.configure("HkB.TLabel", font=self.f_hkb)
-        st.configure("TButton", font=self.f_norm)
-        st.configure("TCheckbutton", font=self.f_norm)
-        st.configure("TCombobox", font=self.f_norm)
+        self.light_bg = st.lookup("TFrame", "background") or root.cget("bg")       # fundalul gri original (tema luminoasă)
+        self._root_light_bg = root.cget("bg")
+        probe = tk.Listbox(root)
+        self.light_lb = tuple(probe.cget(k) for k in ("background", "foreground", "selectbackground", "selectforeground"))
+        probe.destroy()
+        mode = self.settings.get("theme", "light")
+        self.theme_mode = mode if mode in THEME_MODES else "light"
+        set_dark(False)         # se construiește cu aspectul original; tema aleasă se aplică la sfârșit (apply_theme)
+        self._style_ttk()
+        bg_grey = self.bg_grey
 
-        bg_grey = self.bg_grey = st.lookup("TFrame", "background") or root.cget("bg")
 
         # Panou cu comenzi (lățime fixă) + zonă video (mpv încorporat prin --wid). Ordinea de împachetare
         # o stabilește layout(): panoul primește partea opusă playerului, video-ul ocupă restul.
         self.panel = tk.Frame(root, width=PANEL_W)
         self.panel.pack_propagate(False)
+        self._tkpaint(root, {"bg": self._root_light_bg}, {"bg": BG_SLATE})
+        self._tkpaint(self.panel, {}, {"bg": BG_SLATE})
         self.video = tk.Frame(root, bg=self.bg_grey, width=640, height=360)
+        self._tkpaint(self.video, {"bg": bg_grey}, {"bg": BG_DARK})
         self.video.pack(side="left", fill="both", expand=True)
         self.chrome = WindowChrome(root, self.video, self.x11, get_stream=lambda: self.stream,
                                    is_fullscreen=lambda: self.fullscreen)
@@ -5067,6 +5745,7 @@ class Main:
         self.video.bind("<Double-Button-1>", self.toggle_ui)   # când nu rulează mpv (altfel îl prinde mpv)
         # mesaj în mijlocul zonei video cât mpv nu are încă imagine (e acoperit automat de fereastra mpv)
         self.video_lbl = tk.Label(self.video, bg=self.bg_grey, fg="#555555", font=self.f_load, justify="center")
+        self._tkpaint(self.video_lbl, {"bg": bg_grey, "fg": "#555555"}, {"bg": BG_DARK, "fg": TXT_MUTED})
         self.video_lbl.bind("<Button-1>", lambda e: self.video.focus_set())
         self.video_lbl.bind("<Double-Button-1>", self.toggle_ui)
         main = ttk.Frame(self.panel, padding=14)
@@ -5101,22 +5780,15 @@ class Main:
         self.lang_box.bind("<<ComboboxSelected>>", self.on_lang)
         self.lang_box.pack(side="left", fill="x", expand=True)
 
-        lrow = ttk.Frame(tc)
-        lrow.pack(fill="x", pady=5)
-        refresh = ttk.Button(lrow, text="↻", width=2, command=self.detect_tuners)
-        refresh.pack(side="left", padx=(0, 6))
-        self.refresh_tip = Tip(refresh, "")
-        tl = ttk.Label(lrow)
-        tl.pack(side="left")
-        self.tr.append((tl, "tuner_label"))
-        self.adapter = ttk.Combobox(tc, state="readonly", font=self.f_norm)
-        self.adapter.bind("<<ComboboxSelected>>", lambda e: self.update_scan_buttons())
-        self.adapter.pack(fill="x", pady=5)
-
-        self.scan_c_btn = self._btn(tc, "scan_c", lambda: self.start_scan("dvbc"))
-        self.scan_t_btn = self._btn(tc, "scan_t", lambda: self.start_scan("dvbt"))
+        self.tuner_btn = self._btn(tc, "tuner_btn", self.show_tuner)      # sub selectorul de limbă
+        # Alegerea tunerului, scanările și detectarea canalelor codate sunt în fereastra „Tuner TV”; widgeturile
+        # ei rămân folosite de restul programului sub aceleași nume.
+        self.tuner_win = tw = TunerWindow(self)
+        self.refresh_tip, self.adapter = tw.refresh_tip, tw.adapter
+        self.scan_c_btn, self.scan_t_btn, self.ca_btn = tw.scan_c_btn, tw.scan_t_btn, tw.ca_btn
+        self.progress_bar, self.cancel_btn = tw.progress_bar, tw.cancel_btn
+        self._combos.append(self.adapter)
         self.chlist_btn = None   # creat mai jos, în zona de jos, deasupra butonului „Despre”
-        self.ca_btn = self._btn(tc, "ca_btn", self.start_ca_detect)
         self._btn(tc, "cfg_mpv", self.open_mpv_config)
         self._btn(tc, "side_btn", self.swap_side)
         self.rec_tip = Tip(self._btn(tc, "rec_dir", self.choose_rec_dir), str(self.rec_dir))
@@ -5134,6 +5806,25 @@ class Main:
         cb3.pack(fill="x", pady=(5, 0))
         self.tr.append((cb3, "fast_switch"))
         self.fast_tip = Tip(cb3, "", wrap=300)
+        self.ts_var = tk.BooleanVar(value=bool(self.settings.get("timeshift", False)))
+        cb5 = ttk.Checkbutton(tc, variable=self.ts_var, command=self.on_timeshift)
+        cb5.pack(fill="x", pady=(5, 0))
+        self.tr.append((cb5, "ts_enable"))
+        self.ts_tip = Tip(cb5, "", wrap=320)
+        tsr = ttk.Frame(tc)
+        tsr.pack(fill="x", pady=(5, 0))
+        tsl = ttk.Label(tsr)
+        tsl.pack(side="left", padx=(0, 8))
+        self.tr.append((tsl, "ts_size_label"))
+        self.ts_box = ttk.Combobox(tsr, state="readonly", font=self.f_norm, values=[f"{n} MB" for n in TIMESHIFT_SIZES])
+        try:
+            self.ts_box.current(TIMESHIFT_SIZES.index(int(self.settings.get("timeshift_mb", TIMESHIFT_SIZES[0]))))
+        except (ValueError, TypeError):
+            self.ts_box.current(0)
+        self.ts_box.pack(side="left", fill="x", expand=True)
+        self.ts_box.bind("<<ComboboxSelected>>", self.on_timeshift)
+        self._combos.append(self.ts_box)
+        self._sync_ts_box()
         self.show_media_var = tk.BooleanVar(value=bool(self.settings.get("show_media", True)))
         cb4 = ttk.Checkbutton(tc, variable=self.show_media_var, command=self.on_toggle_media)
         cb4.pack(fill="x", pady=(5, 0))
@@ -5147,9 +5838,15 @@ class Main:
         self.country_box.pack(side="left", fill="x", expand=True)
         self.country_box.bind("<<ComboboxSelected>>", self.on_country)
         self.country_tip = Tip(self.country_box, "", wrap=300)
-        self.progress_bar = ttk.Progressbar(tc, mode="indeterminate")
-        self.cancel_btn = self._btn(tc, "scan_cancel", self.cancel_scan)
-        self.cancel_btn.pack_forget()
+        thr = ttk.Frame(tc)
+        thr.pack(fill="x", pady=(5, 0))
+        thl = ttk.Label(thr)
+        thl.pack(side="left", padx=(0, 8))
+        self.tr.append((thl, "theme_label"))
+        self.theme_box = ttk.Combobox(thr, state="readonly", font=self.f_norm)
+        self.theme_box.pack(side="left", fill="x", expand=True)
+        self.theme_box.bind("<<ComboboxSelected>>", self.on_theme)
+        self._combos += [self.lang_box, self.country_box, self.theme_box]
 
         self.epg_lbl = box = ttk.Frame(main)
         box.pack(fill="x", pady=5)
@@ -5163,6 +5860,10 @@ class Main:
         self.search = tk.Entry(bottom, textvariable=self.search_var, font=self.f_norm,
                                bg=bg_grey, fg=TXT_DARK, insertbackground=TXT_DARK,
                                relief="solid", bd=1)
+        self._tkpaint(self.search, {"bg": bg_grey, "fg": "#000000", "insertbackground": "#000000", "relief": "solid", "bd": 1},
+                      {"bg": BG_DARK, "fg": TXT_LIGHT, "insertbackground": ACCENT_LED, "selectbackground": ACCENT_LED,
+                       "selectforeground": ON_ACCENT, "highlightthickness": 1, "highlightbackground": BORDER_SLATE,
+                       "highlightcolor": ACCENT_LED, "relief": "flat"})
         
         self.search.bind("<FocusIn>", self._ph_hide)
         self.search.bind("<FocusOut>", self._ph_show)
@@ -5190,18 +5891,23 @@ class Main:
             self.chlist.bind(key, self.on_list_enter)
         self.chlist.bind("<Button-3>", self.toggle_search)
 
-        # Vedere „informații” (Ctrl+H sau click pe titlu): logo-ul postului și posterul filmului.
+        # Vedere „informații” (Ctrl+H sau click pe titlu): logo-ul postului și posterul filmului (sau difuzorul implicit).
         inf = self.info_frame = tk.Frame(main, bg=bg_grey)
-        self.logo_cv = tk.Canvas(inf, height=96, bg=bg_grey, highlightthickness=0)
-        self.logo_cv.pack(side="top", fill="x", pady=(6, 0))
-        self.poster_cv = tk.Canvas(inf, height=120, bg=bg_grey, highlightthickness=0)
-        self.poster_cv.pack(side="top", fill="both", expand=True, pady=6)
+        self._tkpaint(inf, {"bg": bg_grey}, {"bg": BG_SLATE})
+        # Logo: lipit jos (deasupra barei de separare). Poster/difuzor: lipite sus (sub bara de separare). Toate au mărime fixă.
+        self.logo_cv = tk.Canvas(inf, height=LOGO_H, bg=bg_grey, highlightthickness=0)
+        self._tkpaint(self.logo_cv, {"bg": bg_grey}, {"bg": BG_SLATE})
+        self.logo_cv.pack(side="bottom", fill="x", pady=(0, 6))
+        self.poster_cv = tk.Canvas(inf, height=POSTER_H, bg=bg_grey, highlightthickness=0)
+        self._tkpaint(self.poster_cv, {"bg": bg_grey}, {"bg": BG_SLATE})
         self.poster_cv.bind("<Button-1>", self._poster_click)
         self.poster_cv.bind("<Configure>", lambda e: self._later("_poster_job", self._rescale_poster))
         self.logo_cv.bind("<Configure>", lambda e: self._later("_logo_job", self._draw_logo))
+        self.logo_cv.bind("<Button-1>", self._logo_click)
         self._poster_job = self._logo_job = None
-        # Difuzor retro + plăcuță „Teleops DVB”: umple vederea „informații” doar când logo/poster e dezactivat
+        # Difuzor retro + plăcuță „Teleops DVB”: afișat implicit, înlocuit doar când există poster (sau afiș de știri)
         self.speaker = SpeakerGrille(inf, bg_grey)
+        self._tkpaint(self.speaker, {"bg": bg_grey}, {"bg": BG_SLATE})
         self._sync_speaker()
         self.emboss_font = tkfont.Font(family="DejaVu Sans", size=-16, weight="bold")
         self.search.pack(fill="x", pady=5)
@@ -5232,6 +5938,7 @@ class Main:
                                 default=0, fmt=tone_fmt, command=lambda v: self.on_tone("treble", v), **common)
         for col, knob in enumerate((self.vol_knob, self.bass_knob, self.treble_knob)):
             knob.grid(row=0, column=col, pady=(0, 2))
+            self._tkpaint(knob, {"bg": bg_grey}, {"bg": BG_SLATE})
         self.mute_lbl = ttk.Label(vol, cursor="hand2", font=self.f_norm, anchor="center")
         self.mute_lbl.grid(row=1, column=0, sticky="ew")
         self.mute_lbl.bind("<Button-1>", self.toggle_mute)
@@ -5275,6 +5982,8 @@ class Main:
         if self.borderless_var.get():
             root.after(400, self.apply_borderless)
         self.layout()
+        self.apply_theme()
+        root.after(20000, self._theme_poll)
         root.after(250, self.tick)
         root.after(100, self.poll_events)
 
@@ -5397,17 +6106,24 @@ class Main:
             self.root.after(60, lambda: self.refresh_info(True))
 
     def _sync_speaker(self):
-        """Fără logo/poster, vederea „informații” arată difuzorul (pe mijloc, pe verticală);
-        cu logo/poster activ, difuzorul dispare și revin cele două canvasuri."""
+        """Afișează difuzorul + emblema implicit; le înlocuiește cu poster_cv doar când există un poster sau afiș de știri."""
+        has_poster = self.show_media_var.get() and (self._news or self._poster_img is not None)
         if self.show_media_var.get():
-            self.speaker.pack_forget()
-            self.logo_cv.pack(side="top", fill="x", pady=(6, 0))
-            self.poster_cv.pack(side="top", fill="both", expand=True, pady=6)
+            if not self.logo_cv.winfo_manager():
+                self.logo_cv.pack(side="bottom", fill="x", pady=(0, 6))
         else:
             self.logo_cv.pack_forget()
+
+        if has_poster:
+            self.speaker.pack_forget()
+            if not self.poster_cv.winfo_manager():
+                self.poster_cv.pack(side="top", fill="x", anchor="n")
+        else:
             self.poster_cv.pack_forget()
-            self.speaker.pack(side="top", fill="both", expand=True)
-        self._min_h = 0                                      # înălțimea minimă se recalculează (difuzorul își cere locul)
+            if not self.speaker.winfo_manager():
+                self.speaker.pack(side="top", fill="x", anchor="n")
+
+        self._min_h = 0
         self.root.after_idle(self.fit_min_height)
 
     def on_toggle_media(self):
@@ -5415,7 +6131,7 @@ class Main:
         if not self.show_media_var.get():
             self._logo_tok += 1
             self._poster_tok += 1
-            self._logo_img = self._poster_img = self._poster_raw = self._poster_link = None
+            self._logo_img = self._poster_img = self._poster_raw = self._poster_link = self._logo_link = None
             self._news = False
             self._poster_last_size = (0, 0)
             self._draw_logo()
@@ -5498,27 +6214,76 @@ class Main:
         if force or channel_changed or country_changed or event_changed or retry_poster:
             self._start_poster(ev, cc)
 
+    def _poster_box(self):
+        """Caseta maximă a posterului: lățimea canvasului și înălțimea MAXIMĂ fixă (POSTER_H), nu cea curentă a canvasului."""
+        w = self.poster_cv.winfo_width()
+        return (max(w, 60) if w > 1 else INFO_W), POSTER_H
+
     def _cv_size(self, cv, dw, dh):
         return max(cv.winfo_width(), 60) if cv.winfo_width() > 1 else dw, max(cv.winfo_height(), 40) if cv.winfo_height() > 1 else dh
 
     def _start_logo(self, chan, cc):
         self._logo_tok += 1
-        tok, self._logo_img = self._logo_tok, None
+        tok, self._logo_img, self._logo_link = self._logo_tok, None, None
         self._draw_logo()
         if not self.show_media_var.get() or not chan:
             return
-        w, h = self._cv_size(self.logo_cv, 260, 96)
+        w, h = self._cv_size(self.logo_cv, INFO_W, LOGO_H)
 
         def work():
             png = image_to_png(self.media.logo_bytes(chan, cc), w - 40, h - 14)
-            self.events.put(lambda: self._logo_ready(tok, png))
+            link = self.channel_link(chan, cc)
+            self.events.put(lambda: self._logo_ready(tok, png, link))
         threading.Thread(target=work, daemon=True).start()
 
-    def _logo_ready(self, tok, png):
+    @staticmethod
+    def _resolve_wiki_page(title, lang="ro"):
+        """Întoarce URL-ul direct al paginii Wikipedia dacă există o potrivire clară, altfel None."""
+        if not title:
+            return None
+        q = urllib.parse.quote(title)
+        api = f"https://{lang}.wikipedia.org/w/api.php?action=opensearch&search={q}&limit=3&namespace=0&format=json"
+        raw = http_get(api, timeout=6)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+            titles = data[1] if len(data) > 1 else []
+            urls = data[3] if len(data) > 3 else []
+            if titles and urls:
+                t_low = title.strip().lower()
+                for t, u in zip(titles, urls):
+                    if t.strip().lower() == t_low or t.strip().lower().startswith(t_low + " "):
+                        return u
+                return urls[0]
+        except (ValueError, TypeError, IndexError):
+            pass
+        return None
+
+    @classmethod
+    def channel_link(cls, chan, cc="RO"):
+        """Pagina de Wikipedia despre canalul TV, preferând limba română."""
+        query = (chan or "").strip()
+        if not query:
+            return "https://ro.wikipedia.org/"
+        cleaned = re.sub(r"\b(hd|fhd|uhd|4k|sd|hevc|h265|h264|dvb|mpeg4|mpeg2)\b", " ", query, flags=re.I)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–:.,") or query
+        candidates = [cleaned] if re.search(r"\btv\b", cleaned, re.I) else [f"{cleaned} TV", cleaned]
+        langs = ["ro"] if (cc or "").upper() in ("RO", "MD") else ["ro", "en"]
+        for lang in langs:
+            for cand in candidates:
+                direct = cls._resolve_wiki_page(cand, lang=lang)
+                if direct:
+                    return direct
+        search_q = urllib.parse.quote(candidates[0])
+        return f"https://ro.wikipedia.org/w/index.php?search={search_q}"
+
+    def _logo_ready(self, tok, png, link=None):
         if tok != self._logo_tok or not png:
             return
+        self._logo_link = link
         try:
-            w, h = self._cv_size(self.logo_cv, 260, 96)
+            w, h = self._cv_size(self.logo_cv, INFO_W, LOGO_H)
             self._logo_img = fit_photo(tk.PhotoImage(master=self.root, data=base64.b64encode(png)), w - 40, h - 14)
         except tk.TclError:
             return
@@ -5528,8 +6293,9 @@ class Main:
         cv = self.logo_cv
         cv.delete("all")
         if self.show_media_var.get() and self._logo_img is not None:            # fără logo încărcat nu se afișează nimic
-            w, h = self._cv_size(cv, 260, 96)
-            cv.create_image(w // 2, h // 2, image=self._logo_img)
+            w, h = self._cv_size(cv, INFO_W, LOGO_H)
+            cv.create_image(w // 2, h - 7, image=self._logo_img, anchor="s")      # lipit jos, deasupra barei de separare
+        cv.configure(cursor="hand2" if self.show_media_var.get() and self._logo_img is not None and self._logo_link else "arrow")
 
     def _start_poster(self, ev, cc=None):
         cc = cc or self.country()
@@ -5552,15 +6318,12 @@ class Main:
         genre = self.epg_genre(ev)
         if genre is None and self.cur and re.search(r"film|cinema|movie", fold(self.cur)):
             genre = 1       # EPG-ul nu spune genul, dar canalul e de filme (Film Cafe, Film Mania...)
-        if genre is None and NONMOVIE.search(fold(title)):
-            self._poster_last_attempt = time.time()
-            return
         self._poster_last_attempt = time.time()
-        w, h = self._cv_size(self.poster_cv, 240, 300)
+        w, h = self._poster_box()
 
         def work():
             raw, link = self.media.poster(title, text, genre, cc)
-            png = image_to_png(raw, w - 16, h - 12) if raw else None
+            png = image_to_png(raw, w - 16, h - 2 * POSTER_PAD) if raw else None
             self.events.put(lambda: self._poster_ready(tok, raw, png, link, (w, h)))
         threading.Thread(target=work, daemon=True).start()
 
@@ -5579,8 +6342,8 @@ class Main:
         self._poster_img = None
         if png:
             try:
-                w, h = self._cv_size(self.poster_cv, 240, 300)
-                self._poster_img = fit_photo(tk.PhotoImage(master=self.root, data=base64.b64encode(png)), w - 16, h - 12)
+                w, h = self._poster_box()
+                self._poster_img = fit_photo(tk.PhotoImage(master=self.root, data=base64.b64encode(png)), w - 16, h - 2 * POSTER_PAD)
             except tk.TclError:
                 self._poster_img = None
         self._draw_poster()
@@ -5592,21 +6355,21 @@ class Main:
         if not self._poster_raw:
             self._draw_poster()
             return
-        w, h = self._cv_size(self.poster_cv, 240, 300)
+        w, h = self._poster_box()
         if (w, h) == self._poster_last_size and self._poster_img is not None:
             self._draw_poster()
             return
         tok, raw = self._poster_tok, self._poster_raw
 
         def work():
-            png = image_to_png(raw, w - 16, h - 12)
+            png = image_to_png(raw, w - 16, h - 2 * POSTER_PAD)
             self.events.put(lambda: tok == self._poster_tok and self._poster_ready(tok, raw, png, self._poster_link, (w, h)))
         threading.Thread(target=work, daemon=True).start()
 
     def _draw_news(self, cv):
         """Afiș stilizat pentru știri: două benzi identice ca stil (chenar alb, text alb, umbră): roșie „BREAKING NEWS”
         și albastră „Totul va fi bine!”."""
-        w, h = self._cv_size(cv, 240, 300)
+        w, h = self._poster_box()
         pad = 14
         lines = self.t("news_lines").split("\n")[:2]
         bands = ((lines[0], "#c0111f"), (lines[1], "#1f5fbf"))
@@ -5618,31 +6381,43 @@ class Main:
                 break
             size -= 1
         band_h, gap = f.metrics("linespace") + 16, max(10, size // 2)
-        y = max(6, (h - (2 * band_h + gap)) // 2)
+        y = POSTER_PAD
+        cv.configure(height=min(POSTER_H, 2 * band_h + gap + 2 * POSTER_PAD))      # canvasul cât afișul, maxim POSTER_H
         for t, col in bands:
-            cv.create_rectangle(pad // 2, y + 2, w - pad // 2 + 1, y + band_h + 2, fill="#8a8a8a", outline="")   # umbră
+            cv.create_rectangle(pad // 2, y + 2, w - pad // 2 + 1, y + band_h + 2, fill=themed("#8a8a8a", "#161719"), outline="")   # umbră
             cv.create_rectangle(pad // 2, y, w - pad // 2, y + band_h, fill=col, outline="#ffffff", width=2)
             cv.create_text(w // 2, y + band_h // 2, text=t, font=f, fill="#ffffff")
             y += band_h + gap
 
     def _draw_poster(self):
+        self._sync_speaker()
         cv = self.poster_cv
         cv.delete("all")
         if self.show_media_var.get() and self._news:
             self._draw_news(cv)
-        elif self.show_media_var.get() and self._poster_img is not None:        # fără poster încărcat nu se afișează nimic
-            w, h = self._cv_size(cv, 240, 300)
-            cv.create_image(w // 2, h // 2, image=self._poster_img)
+        elif self.show_media_var.get() and self._poster_img is not None:
+            w = self._poster_box()[0]
+            cv.configure(height=min(POSTER_H, self._poster_img.height() + 2 * POSTER_PAD))   # canvasul cât posterul (max POSTER_H)
+            cv.create_image(w // 2, POSTER_PAD, image=self._poster_img, anchor="n")      # lipit sus, sub bara de separare
         cv.configure(cursor="hand2" if self.show_media_var.get() and self._poster_img is not None and self._poster_link else "arrow")
+
+    @staticmethod
+    def _open_url(url):
+        try:
+            subprocess.Popen(["xdg-open", url], env=get_clean_env(), stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            import webbrowser
+            webbrowser.open(url)
 
     def _poster_click(self, _=None):
         if self._poster_link and self._poster_img is not None:
-            try:
-                subprocess.Popen(["xdg-open", self._poster_link], env=get_clean_env(), stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, start_new_session=True)
-            except OSError:
-                import webbrowser
-                webbrowser.open(self._poster_link)
+            self._open_url(self._poster_link)
+
+    def _logo_click(self, _=None):
+        """Click pe logo: deschide pagina de Wikipedia a canalului (preferabil în română)."""
+        if self._logo_link and self._logo_img is not None and self.show_media_var.get():
+            self._open_url(self._logo_link)
 
     def on_key_m(self, _=None):
         if not self._typing():
@@ -5747,6 +6522,10 @@ class Main:
             self.open_jump()
         elif msg in ("vol-up", "vol-down"):
             self.wheel_volume(VOL_WHEEL_STEP if msg == "vol-up" else -VOL_WHEEL_STEP)
+        elif msg in ("ch-up", "ch-down"):
+            self.pick_step(-1 if msg == "ch-up" else 1)
+        elif msg == "ch-enter":
+            self.pick_commit()
 
     # ---- mutarea ferestrei prin tragere (fără titlebar)
 
@@ -5808,12 +6587,239 @@ class Main:
         self.reset_tip.text = self.t("reset_tip")
         self._draw_poster()
         self._sync_country_box()
+        self._sync_theme_box()
+        self.ts_tip.text = self.t("ts_tip")
+        self.tuner_win.title(self.t("tuner_title"))
         self._sync_stop_btn()
         self.update_video_msg()
         if self._ph_active:
             self.search_var.set(self.t("search_ph"))
         if not self.adapter_items:
             self.adapter.set(self.t("no_tuner"))
+
+    # ---- schimbarea canalului cu ↑/↓ de pe video: banner cu numele, comutarea după CH_PICK_MS sau la Enter
+    def _pick_names(self):
+        """Canalele între care se mută ↑/↓: cele din lista afișată (cu filtrul de căutare), în ordinea ei, fără cele codate.
+        Dacă filtrul n-a lăsat niciunul, toate canalele."""
+        names = [m[1] for m in self.list_items_meta if m[0] == "channel" and m[1] not in self.locked]
+        if not names:
+            names = [c for c, _ in self.tv_channels + self.radio_channels if c not in self.locked]
+        return names
+
+    def pick_step(self, d):
+        names = self._pick_names()
+        if not names or not self.stream:
+            return
+        base = self._pick if self._pick in names else self.cur
+        i = (names.index(base) + d) % len(names) if base in names else (0 if d > 0 else len(names) - 1)
+        self._pick = names[i]
+        if self._pick_job:
+            self.root.after_cancel(self._pick_job)
+        self._pick_job = self.root.after(CH_PICK_MS, self.pick_commit)
+        self.stream.show_banner(self._pick.strip(), CH_PICK_MS, True)
+        for idx, meta in enumerate(self.list_items_meta):        # lista arată și ea canalul ales
+            if meta[0] == "channel" and meta[1] == self._pick:
+                self.chlist.selection_clear(0, "end")
+                self.chlist.selection_set(idx)
+                if not self.settings_on:
+                    self.chlist.see(f"{idx + 1}.0")
+                break
+
+    def pick_commit(self):
+        """Pornește canalul ales cu ↑/↓ (după 3 secunde sau la Enter)."""
+        name = self._pick
+        self._pick_cancel()
+        if name and name != self.cur:
+            self.try_tune(name)
+
+    def _pick_cancel(self):
+        self._pick = None
+        if self._pick_job:
+            self.root.after_cancel(self._pick_job)
+            self._pick_job = None
+
+    # ---- Timeshift
+    def _ts_size(self):
+        i = self.ts_box.current()
+        return TIMESHIFT_SIZES[i] if 0 <= i < len(TIMESHIFT_SIZES) else TIMESHIFT_SIZES[0]
+
+    def ts_mb(self):
+        """MB de buffer pentru Streamer; 0 = Timeshift oprit."""
+        return self._ts_size() if self.ts_var.get() else 0
+
+    def _sync_ts_box(self):
+        self.ts_box.configure(state="readonly" if self.ts_var.get() else "disabled")
+
+    def on_timeshift(self, _=None):
+        self._sync_ts_box()
+        if self.stream and self.cur:
+            if self.rec_on:         # nu oprim o înregistrare pentru o setare
+                self.stream.toast(self.t("ts_later"), 4000)
+            else:
+                self.tune(self.cur)
+        elif _ is not None:
+            self.chlist.focus_set()
+
+    # ---- fereastra „Tuner TV”
+    def show_tuner(self):
+        self.tuner_win.show()
+
+    # ---- „Programările mele” (fila din fereastra EPG)
+    def my_schedules(self):
+        """Înregistrările și vizionările programate care n-au pornit încă, în ordinea startului: [(\"rec\"|\"watch\", job)]."""
+        rows = [("rec", j) for j in self.schedule.jobs if j.state != ACTIVE] + [("watch", j) for j in self.watch.jobs]
+        return sorted(rows, key=lambda r: r[1].start)
+
+    def cancel_schedule(self, kind, job):
+        if kind == "rec":
+            if job is self.rec_job:
+                self.set_recording(False)
+            self.schedule.remove(job)
+        else:
+            self.watch.remove(job)
+
+    def clear_schedules(self):
+        for kind, job in self.my_schedules():
+            self.cancel_schedule(kind, job)
+
+    # ---- temă: luminoasă (aspectul original) / întunecată (din darkmode.py) / automată (după sistem)
+    def _style_ttk(self):
+        """Stilurile ttk ale temei active. La schimbarea temei se refac toate (stilurile sunt ținute pe fiecare temă)."""
+        st = self.st
+        if not DARK:
+            st.theme_use("default")
+            st.configure("TLabel", font=self.f_bold)
+            st.configure("Brand.TLabel", font=self.f_brand, foreground="#555555")   # aceeași culoare ca mesajul „Se încarcă...”
+            st.configure("Rec.TLabel", font=self.f_bold, foreground="#dc2626")
+            st.configure("Epg.TLabel", font=self.f_norm)
+            st.configure("EpgB.TLabel", font=self.f_bold)
+            st.configure("Hk.TLabel", font=self.f_hk)
+            st.configure("HkB.TLabel", font=self.f_hkb)
+            st.configure("TButton", font=self.f_norm)
+            st.configure("TCheckbutton", font=self.f_norm)
+            st.configure("TCombobox", font=self.f_norm)
+            self.bg_grey = self.light_bg
+        else:
+            st.theme_use("clam")
+            bg = self.bg_grey = BG_SLATE
+            st.configure(".", background=bg, foreground=TXT_LIGHT, bordercolor=BORDER_SLATE,
+                         darkcolor=BG_DARK, lightcolor=BORDER_SLATE, troughcolor=BG_DARK,
+                         focuscolor=ACCENT_LED, selectbackground=ACCENT_LED, selectforeground=ON_ACCENT)
+            st.configure("TFrame", background=bg)
+            st.configure("TLabelframe", background=bg, bordercolor=BORDER_SLATE)
+            st.configure("TLabelframe.Label", background=bg, foreground=ACCENT_LED, font=self.f_bold)
+            st.configure("TSeparator", background=BORDER_SLATE)
+            st.configure("TLabel", background=bg, foreground=TXT_LIGHT, font=self.f_bold)
+            st.configure("Brand.TLabel", background=bg, font=self.f_brand, foreground=ACCENT_LED)
+            st.configure("Rec.TLabel", background=bg, font=self.f_bold, foreground="#ff5c5c")
+            st.configure("Epg.TLabel", background=bg, foreground=TXT_LIGHT, font=self.f_norm)
+            st.configure("EpgB.TLabel", background=bg, foreground=ACCENT_LED, font=self.f_bold)
+            st.configure("Hk.TLabel", background=bg, foreground=TXT_LIGHT, font=self.f_hk)
+            st.configure("HkB.TLabel", background=bg, foreground=ACCENT_LED, font=self.f_hkb)
+            st.configure("TButton", background=BG_PANEL, foreground=TXT_LIGHT, bordercolor=BORDER_SLATE,
+                         padding=(8, 4), font=self.f_norm)
+            st.map("TButton",
+                   background=[("disabled", BG_SLATE), ("pressed", BG_DARK), ("active", ACCENT_HOVER)],
+                   foreground=[("disabled", "#6a6e75"), ("active", "#ffffff")],
+                   bordercolor=[("focus", ACCENT_LED), ("active", ACCENT_LED)])
+            st.configure("TCheckbutton", background=bg, foreground=TXT_LIGHT,
+                         indicatorbackground=BG_DARK, indicatorforeground=ACCENT_LED, font=self.f_norm)
+            st.map("TCheckbutton",
+                   background=[("active", bg)],
+                   foreground=[("disabled", "#6a6e75"), ("active", "#ffffff")],
+                   indicatorbackground=[("selected", BG_DARK), ("active", BG_PANEL)])
+            st.configure("TCombobox", fieldbackground=BG_PANEL, background=BG_PANEL, foreground=TXT_LIGHT,
+                         arrowcolor=ACCENT_LED, bordercolor=BORDER_SLATE, font=self.f_norm)
+            st.map("TCombobox",
+                   fieldbackground=[("readonly", BG_PANEL), ("disabled", BG_SLATE)],
+                   foreground=[("readonly", TXT_LIGHT), ("disabled", "#6a6e75")],
+                   bordercolor=[("focus", ACCENT_LED), ("hover", ACCENT_LED)])
+            st.configure("Vertical.TScrollbar", background=BG_PANEL, troughcolor=BG_DARK,
+                         bordercolor=BORDER_SLATE, arrowcolor=ACCENT_LED)
+            st.map("Vertical.TScrollbar", background=[("active", ACCENT_HOVER)])
+            st.configure("Horizontal.TProgressbar", background=ACCENT_LED, troughcolor=BG_DARK, bordercolor=BORDER_SLATE)
+            st.configure("Horizontal.TScale", background=bg, troughcolor=BG_DARK)
+            st.configure("TNotebook", background=bg, bordercolor=BORDER_SLATE)
+            st.configure("TNotebook.Tab", background=BG_DARK, foreground=TXT_MUTED, padding=(10, 4), font=self.f_norm)
+            st.map("TNotebook.Tab",
+                   background=[("selected", BG_PANEL), ("active", ACCENT_HOVER)],
+                   foreground=[("selected", ACCENT_LED), ("active", TXT_LIGHT)])
+        st.configure("Epg.TButton", padding=(3 + CFG_W + CFG_GAP, 3, 3, 3))
+
+    def _tkpaint(self, w, light, dark):
+        """Înregistrează un widget Tk (nu ttk) pentru schimbarea temei. `light` = opțiunile aspectului original;
+        celelalte opțiuni pe care le schimbă `dark` își păstrează valoarea implicită din tema luminoasă."""
+        saved = {k: w.cget(k) for k in dark if k not in light}
+        self._themed.append((w, {**saved, **light}, dark))
+        return w
+
+    def _apply_tk_colors(self):
+        alive = []
+        for w, light, dark in self._themed:
+            try:
+                w.configure(**(dark if DARK else light))
+            except tk.TclError:
+                continue
+            alive.append((w, light, dark))
+        self._themed = alive
+
+    def _theme_popdowns(self):
+        """Culorile listelor derulante ale combobox-urilor (sunt widgeturi Tk separate, nu urmează stilul ttk)."""
+        if not DARK and not self._dark_seen:
+            return                      # tema luminoasă de la pornire: nimic de schimbat
+        bg, fg, sbg, sfg = themed(self.light_lb, (BG_PANEL, TXT_LIGHT, ACCENT_LED, ON_ACCENT))
+        for opt, val in (("background", bg), ("foreground", fg), ("selectBackground", sbg), ("selectForeground", sfg)):
+            self.root.option_add(f"*TCombobox*Listbox.{opt}", val)         # cele create mai târziu (în dialoguri)
+        for cb in self._combos:
+            try:
+                pop = self.root.tk.call("ttk::combobox::PopdownWindow", str(cb))
+                self.root.tk.call(f"{pop}.f.l", "configure", "-background", bg, "-foreground", fg,
+                                  "-selectbackground", sbg, "-selectforeground", sfg)
+            except tk.TclError:
+                pass
+
+    def _sync_theme_box(self):
+        self.theme_box.configure(values=[self.t("theme_light"), self.t("theme_dark"), self.t("theme_auto")])
+        self.theme_box.current(THEME_MODES.index(self.theme_mode))
+
+    def on_theme(self, _=None):
+        i = self.theme_box.current()
+        self.theme_mode = THEME_MODES[i] if 0 <= i < len(THEME_MODES) else "light"
+        self.chlist.focus_set()
+        self.apply_theme()
+
+    def apply_theme(self, dark=None):
+        """Aplică tema aleasă pe loc. Ferestrele secundare (Despre, EPG) se închid: se recreează cu tema nouă."""
+        if dark is None:
+            dark = system_prefers_dark() if self.theme_mode == "auto" else self.theme_mode == "dark"
+        if bool(dark) == DARK:
+            return
+        set_dark(dark)
+        self._dark_seen = self._dark_seen or DARK
+        for win in (self.about_win, self.epg_win):
+            try:
+                if win and win.winfo_exists():
+                    win.destroy()
+            except tk.TclError:
+                pass
+        self._style_ttk()
+        self._apply_tk_colors()
+        self.tuner_win.configure(bg=self.bg_grey)
+        self.chlist.retheme(self.bg_grey)
+        self._theme_popdowns()
+        self._draw_poster()
+        self._draw_logo()
+
+    def _theme_poll(self):
+        """Cu tema „Automată”, urmărește schimbarea temei sistemului (la 20 s, într-un fir: nu blochează interfața)."""
+        if getattr(self, "_closing", False):
+            return
+        if self.theme_mode == "auto":
+            def work():
+                dark = system_prefers_dark()
+                self.events.put(lambda: self.theme_mode == "auto" and self.apply_theme(dark))
+            threading.Thread(target=work, daemon=True).start()
+        self.root.after(20000, self._theme_poll)
 
     def show_volume(self, v):
         self.volume = v
@@ -5981,8 +6987,8 @@ class Main:
                 else:
                     messagebox.showerror(self.t("play_err"), f"dvbv5-zap: cod {rc}", parent=self.root)
         on = self.stream is not None
-        for b in (self.rec_btn, self.epg_btn):
-            self.set_enabled(b, on)
+        self.set_enabled(self.rec_btn, on)
+        self.set_enabled(self.epg_btn, on or bool(self.schedule.jobs or self.watch.jobs))     # fără redare: doar cu programări
         self._sync_stop_btn()      # fără redare, butonul devine „Închide programul”
         self.brand.configure(text=self.cur.strip() if on and self.cur else TITLE)
         self.set_epg(self.epg_now_next() if on else "")
@@ -6223,6 +7229,8 @@ class Main:
         self.stop()
         self.scan_active, self.scan_cancelled = True, False
         self.update_scan_buttons()
+        if not self.tuner_win.is_open():            # scanarea pornită din altă parte: arătăm progresul
+            self.tuner_win.show()
         self.progress_bar.pack(fill="x", pady=5)
         self.progress_bar.start(15)
         self.set_enabled(self.cancel_btn, True)
@@ -6344,7 +7352,8 @@ class Main:
                                    get_lang_func=lambda: self.lang,
                                    wid=self.video.winfo_id(),
                                    on_msg=lambda m: self.events.put(lambda: self.on_ui_msg(m)),
-                                   tone=(self.bass, self.treble), fast=bool(self.fast_var.get()))
+                                   tone=(self.bass, self.treble), fast=bool(self.fast_var.get()),
+                                   timeshift=self.ts_mb())
             self.cur = self.last_channel = name
             self.select_current()
         except Exception as e:
@@ -6353,6 +7362,7 @@ class Main:
             messagebox.showerror(self.t("play_err"), str(e), parent=self.root)
 
     def stop(self, fast=False):
+        self._pick_cancel()
         self.set_recording(False)
         if self.stream:
             self.stream.stop(background=fast)
@@ -6547,8 +7557,12 @@ class Main:
             "rec_dir": str(self.rec_dir),
             "favorites": list(self.favorites),
             "mpv_opts": self.mpv_opts,
+            "theme": self.theme_mode,
+            "timeshift": bool(self.ts_var.get()),
+            "timeshift_mb": self._ts_size(),
         })
         self.stop()
+        clean_timeshift_dir()
         self.scan_cancelled = True
         if self.scan_proc:
             self.scan_proc.kill()
@@ -6589,6 +7603,7 @@ def main():
     CONF_DIR.mkdir(parents=True, exist_ok=True)
     write_osc_script()              # se rescrie la fiecare pornire
     ensure_mpv_conf()
+    clean_timeshift_dir()           # resturi ale bufferului Timeshift (dacă mpv a fost oprit brusc)
 
     inhibitor = SleepInhibitor()    # fără suspend/screensaver cât rulează programul
     inhibitor.start()
