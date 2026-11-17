@@ -1,26 +1,30 @@
 # Teleops DVB 📺
 
-**Teleops DVB** is a lightweight Python desktop application (built with Tkinter) designed for watching and recording DVB-C (Cable) and DVB-T/T2 (Terrestrial) TV and radio channels. It leverages `dvb-tools` (`dvbv5-scan`, `dvbv5-zap`, `dvb-fe-tool`) for tuning, scanning, and signal probing, and **MPV** (native or Flatpak `io.mpv.Mpv`) as the embedded playback engine, featuring live and full EPG (TV Guide), scheduled recordings, automatic channel switching, DVB subtitles, audio tone controls, and anti-sleep system integration.
+**Teleops DVB** is a lightweight Python desktop application (built with Tkinter) designed for watching and recording DVB-C (Cable) and DVB-T/T2 (Terrestrial) TV and radio channels. It leverages `dvb-tools` (`dvbv5-scan`, `dvbv5-zap`, `dvb-fe-tool`) for tuning, scanning, and signal probing, and **MPV** (native or Flatpak `io.mpv.Mpv`) as the embedded playback engine, featuring live TV timeshift, live and full EPG (TV Guide), scheduled recordings, automatic channel switching, DVB subtitles, retro audio tone controls, dark mode, and anti-sleep system integration.
 
 ---
 
 ## 🌟 Features
 
-- 📡 **Automatic Channel & Scrambled Detection:** Supports full-spectrum DVB-C (Cable) and DVB-T/T2 (Terrestrial) scanning (`dvbv5-scan`) with tuner warm-up and automatic/manual scrambled channel detection (`🔑`) based on actual TS scrambling bits and SDT service types.
+- 📡 **Dedicated TV Tuner & Scrambled Detection:** Manage tuner selection, full-spectrum DVB-C (Cable) and DVB-T/T2 (Terrestrial) channel scanning (`dvbv5-scan`) with non-blocking background tuner warm-up, and automatic/manual scrambled channel detection (`🔑`) based on actual TS scrambling bits and SDT service types in a clean, dedicated **TV Tuner** window.
 
-- 📺 **Embedded MPV Player Integration:** High-performance video and audio playback embedded into the Tkinter window via `--wid` and controlled over an IPC socket, including a custom mini-OSC overlay (subtitles, audio tracks, mute), signal info overlay, and seek/pause guards for live TV.
+- 📺 **Embedded MPV Player Integration:** High-performance video and audio playback embedded into the Tkinter window via `--wid` and controlled over an IPC socket, including a custom mini-OSC overlay (subtitles, audio tracks, mute) and signal info overlay.
 
-- 📋 **Live & Full EPG (TV Guide):** Real-time display of current and upcoming programs with progress bars and remaining time on the MPV OSD, live now/next display in the side panel, plus a dedicated EPG window with programme descriptions.
+- ⏪ **Live TV Timeshift (Pause & Rewind):** Pause live television, rewind, or fast-forward using an adjustable RAM and disk buffer (`512 MB`, `1024 MB`, or `2048 MB`), complete with a dedicated on-screen control bar and automatic cleanup of leftover cache files.
+
+- 📋 **Live & Full EPG (TV Guide) & Schedule Manager:** Real-time display of current and upcoming programs with progress bars and remaining time on the MPV OSD, live now/next display in the side panel, plus a dedicated EPG window featuring programme descriptions and a **"My Schedule"** tab to view, manage, or cancel all upcoming scheduled recordings and channel-switch reminders in one place.
 
 - ⏺️ **Manual & Scheduled Stream Recording:** Record live TV streams directly to `.ts` files (`~/Videos/TeleopsDVB` or custom folder) manually or schedule recordings from the EPG with pre/post margins (`±2 min`), conflict handling, and automatic channel tuning.
 
-- 📺 **“I Want to Watch” Reminders:** Schedule automatic channel switching (`1 min` before start) from the EPG when watching another channel, respecting active or conflicting scheduled recordings.
+- ⏰ **“I Want to Watch” Reminders:** Schedule automatic channel switching (`1 min` before start) from the EPG when watching another channel, respecting active or conflicting scheduled recordings.
 
-- 💬 **DVB Subtitles & Audio Controls:** Full support for DVB subtitles, preferred audio/subtitle languages, volume/mute control, bass and treble (`±10 dB`) audio filtering, and an MPV configuration dialog (`mpv.conf` block management + config validation).
+- 🎛️ **DVB Subtitles & Retro Audio Controls:** Full support for DVB subtitles, preferred audio/subtitle languages, mute control, rotary amplifier-style knobs for **Volume**, **Bass**, and **Treble** (`±10 dB`) audio filtering, a retro speaker grille emblem in the channel info view, and an MPV configuration dialog (`mpv.conf` block management + config validation).
 
-- 🖼️ **Channel Logos, Posters & Quick Jump:** Optional channel logos (via `iptv-org` & TOT country detection), movie/show posters (Apple/iTunes, IMDb, TVmaze, optional TMDB with IMDb link), Favorites (`★`), instant list search, and a `J` quick-jump overlay.
+- 🖼️ **Channel Logos, Posters & Quick Surfing:** Optional channel logos (via `iptv-org` & TOT country detection, clickable in the info view to open the channel's Wikipedia page), movie/show posters (Apple/iTunes, IMDb, TVmaze, optional TMDB with IMDb link), Favorites (`★`), instant list search, a `J` quick-jump overlay, and video-overlay channel preview surfing with a countdown banner.
 
-- 💤 **System & Desktop Integration:** Single-instance lock, sleep/screensaver/display inhibition (D-Bus, `systemd-inhibit`, X11), borderless/frameless mode with edge resizing and drag-to-move, left/right video panel placement, optional autoplay of the last channel, fast channel switching, and interface support for **Romanian**, **English**, and **Italian**.
+- 🎨 **Dark Mode & Automatic Theme Switching:** Includes a sleek Dark / Slate Hi-Fi theme alongside the classic light theme, plus an **Automatic** mode that follows your desktop system theme.
+
+- 💤 **System & Desktop Integration:** Single-instance lock, sleep/screensaver/display inhibition (D-Bus, `systemd-inhibit`, X11), borderless/frameless mode with edge resizing and drag-to-move, left/right video panel placement, optional autoplay of the last channel, fast channel switching with safe event handling, and interface support for **Romanian**, **English**, and **Italian**.
 
 ---
 
@@ -68,16 +72,21 @@ chmod +x teleops.py
 | Action | Shortcut |
 |---|---|
 | Play channel | `Double click` / `Enter` |
+| Preview / surf channels (on video) | `↑` / `↓` (`Enter` to switch immediately) |
 | Add / Remove Favorites | `CTRL + Left Click` |
 | Show/hide search | `Right Click on list` |
 | Jump to channel (quick search) | `J` |
 | Previous channel | `Backspace` |
+| Pause / Play live TV (Timeshift) | `Space` |
+| Seek 10 seconds (Timeshift) | `CTRL + ←` / `CTRL + →` |
+| Jump back to live TV | `CTRL + 0` |
 | Hide list; logo, poster | `Ctrl + H` / `Click on the title` |
 | Channel info (EPG + signal) | `I` |
-| TV Guide (EPG) | `CTRL + I` |
+| Open channel Wikipedia page | `Click on channel logo (in info view)` |
+| TV Guide (EPG) & My Schedule | `CTRL + I` |
 | Start/stop recording | `CTRL + R` |
 | Subtitles / audio / mute | `Right click on video` |
-| Volume | `Mouse wheel on video` |
+| Volume | `Mouse wheel` or `←` / `→` on video |
 | Volume / bass / treble knobs | `Drag or mouse wheel; double click = reset` |
 | Mute / Unmute | `M` |
 | Fullscreen | `F` / `F11` |
