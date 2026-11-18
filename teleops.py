@@ -113,7 +113,7 @@ from tkinter import filedialog, messagebox, ttk
 # ──────────────────────────────────────────────────────────────────────────────
 
 TITLE = "Teleops DVB"
-VERSION = "4.5.0"
+VERSION = "4.6.1"
 WM_NAME, WM_CLASS = "teleops", "Teleops"   # WM_CLASS al ferestrei: GNOME/KDE îl potrivesc cu fișierul .desktop (iconiță în bara de activități)
 CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
@@ -764,6 +764,18 @@ EXT_T = {
     "ts_later": ("Timeshift se va aplica la următoarea schimbare de canal.",
                  "Timeshift will apply on the next channel change.",
                  "Timeshift si applicherà al prossimo cambio di canale."),
+    "ts_mode_label": ("Buffer în:", "Buffer in:", "Buffer in:"),
+    "ts_mode_ram": ("Memorie RAM (max. 1024 MB)", "RAM (max. 1024 MB)", "RAM (max. 1024 MB)"),
+    "ts_mode_disk": ("Disc (dosarul înregistrărilor)", "Disk (recordings folder)", "Disco (cartella registrazioni)"),
+    "ts_fp_fallback": ("mpv (Flatpak) nu poate scrie în dosarul înregistrărilor: bufferul e în cache-ul Flatpak. "
+                       "Dă-i acces: flatpak override --user --filesystem=<dosar> io.mpv.Mpv",
+                       "mpv (Flatpak) cannot write to the recordings folder: the buffer is in the Flatpak cache. "
+                       "Grant access: flatpak override --user --filesystem=<folder> io.mpv.Mpv",
+                       "mpv (Flatpak) non può scrivere nella cartella delle registrazioni: il buffer è nella cache Flatpak. "
+                       "Concedi l'accesso: flatpak override --user --filesystem=<cartella> io.mpv.Mpv"),
+    "ts_no_disk": ("mpv-ul instalat nu are cache pe disc (mpv prea vechi): Timeshift folosește RAM, max. 1024 MB.",
+                   "The installed mpv has no on-disk cache (mpv too old): Timeshift uses RAM, max. 1024 MB.",
+                   "L'mpv installato non ha la cache su disco (mpv troppo vecchio): Timeshift usa la RAM, max. 1024 MB."),
     # Tema
     "theme_label": ("Temă:", "Theme:", "Tema:"),
     "theme_light": ("Luminoasă", "Light", "Chiaro"),
@@ -775,7 +787,7 @@ EXT_T = {
     "tuner_close": ("Închide", "Close", "Chiudi"),
     # Taste noi (fila „Comenzi rapide” din „Despre”)
     "hk_chan": ("Canal următor / anterior (după 3 s)", "Next / previous channel (after 3 s)", "Canale successivo / precedente (dopo 3 s)"),
-    "hk_chan_k": ("↑ / ↓ pe video; Enter = acum", "↑ / ↓ on video; Enter = now", "↑ / ↓ sul video; Invio = subito"),
+    "hk_chan_k": ("↑ / ↓ pe video; Enter = acum; Esc = anulează", "↑ / ↓ on video; Enter = now; Esc = cancel", "↑ / ↓ sul video; Invio = subito; Esc = annulla"),
     "hk_volkeys": ("Volum (tastatură)", "Volume (keyboard)", "Volume (tastiera)"),
     "hk_volkeys_k": ("← / → pe video", "← / → on video", "← / → sul video"),
     "hk_ts_pause": ("Pauză / redare (Timeshift)", "Pause / play (Timeshift)", "Pausa / riproduzione (Timeshift)"),
@@ -785,6 +797,8 @@ EXT_T = {
     "hk_ts_live": ("Salt la live (Timeshift)", "Jump to live (Timeshift)", "Vai alla diretta (Timeshift)"),
     "hk_ts_live_k": ("CTRL + 0", "CTRL + 0", "CTRL + 0"),
     "hk_ts_bar": ("Bară Timeshift cu mouse-ul", "Timeshift bar with the mouse", "Barra Timeshift con il mouse"),
+    "hk_stats": ("Informații mpv (pagini 1-5)", "mpv info (pages 1-5)", "Informazioni mpv (pagine 1-5)"),
+    "hk_stats_k": ("Butonul i din bara video", "The i button in the video bar", "Pulsante i nella barra video"),
     "hk_ts_bar_k": ("Click dreapta pe video", "Right click on video", "Clic destro sul video"),
     # EPG: fila „Programările mele”
     "epg_tab_prog": ("Program TV", "TV Guide", "Guida TV"),
@@ -2069,7 +2083,7 @@ class WatchSchedule:
 #   Mini-OSC Lua încorporat în mpv (subtitrare / audio / mute). Se scrie în CONF_DIR la fiecare pornire.
 # ──────────────────────────────────────────────────────────────────────────────
 
-OSC_LUA = r'''-- Teleops DVB: mini-OSC cu subtitrare, coloană sonoră, difuzor și (cu Timeshift) bara de pauză/derulare.
+OSC_LUA = r'''-- Teleops DVB: mini-OSC cu info mpv, subtitrare, coloană sonoră, difuzor și (cu Timeshift) bara de pauză/derulare.
 -- Fișier generat de teleops.py (se rescrie la fiecare pornire).
 local L = {sub = "Subtitrare", audio = "Coloană sonoră", off = "Dezactivat"}
 local ACC = "FFC040"
@@ -2077,10 +2091,12 @@ local shown, menu, items, timer = false, nil, {}, nil
 local last_over, last_hot = false, false
 local ov = mp.create_osd_overlay("ass-events")
 
--- Timeshift: activ doar dacă programul a pornit mpv cu bufferul pe disc (--cache-on-disk=yes), adică cu setarea bifată.
-local TS = mp.get_property("options/cache-on-disk", "no") == "yes"
+-- Timeshift: activ doar dacă programul a pornit mpv cu --script-opts-append=teleops-ts=1 (setarea bifată; buffer în RAM sau pe disc).
+local TS = mp.get_opt("teleops-ts") == "1" or mp.get_property("options/cache-on-disk", "no") == "yes"
 local TS_STEP, TS_SLACK = 10, 4      -- pasul de derulare (s); sub TS_SLACK secunde în urma live-ului suntem „la live”
 local ts = {lo = 0, hi = 0, pos = 0, behind = 0, paused = false, flash = 0}
+-- Informațiile native mpv (stats.lua, paginile 1-5): rămân pe ecran până la butonul „Exit”
+local stats = {on = false, page = 1}
 
 local function I(v) return math.floor(v + 0.5) end
 local function esc(s) return (tostring(s):gsub("[{}\\\n]", " ")) end
@@ -2093,9 +2109,9 @@ end
 
 local function bar_rects(w, h, k)
     local bw, bh, gap, m = 46 * k, 34 * k, 8 * k, 18 * k
-    local x0, y0 = w - m - 3 * bw - 2 * gap, h - m - bh
+    local x0, y0 = w - m - 4 * bw - 3 * gap, h - m - bh
     local r = {}
-    for i, name in ipairs({"sub", "audio", "spk"}) do
+    for i, name in ipairs({"info", "sub", "audio", "spk"}) do
         local x = x0 + (i - 1) * (bw + gap)
         r[name] = {x, y0, x + bw, y0 + bh}
     end
@@ -2129,10 +2145,24 @@ local function ts_layout(w, h, k)
         r[name] = {x, y0, x + bw, y0 + bh}
         x = x + bw + gap
     end
-    local right = bars.sub[1] - 14 * k          -- se oprește înainte de butoanele CC / ♪ / difuzor
+    local right = bars.info[1] - 14 * k         -- se oprește înainte de butoanele i / CC / ♪ / difuzor
     r.live = {right - 70 * k, y0, right, y0 + bh}
     r.time = {r.live[1] - gap - 80 * k, y0, r.live[1] - gap, y0 + bh}
     r.track = {x, y0, math.max(x, r.time[1] - gap), y0 + bh}
+    return r
+end
+
+-- butoanele paginilor de informații mpv (sub eticheta REC, sus-dreapta): 1..5 și Exit
+local function st_layout(w, h, k)
+    local bw, bh, gap, m = 34 * k, 34 * k, 6 * k, 18 * k
+    local ew = 58 * k
+    local x = w - m - (5 * bw + 5 * gap + ew)
+    local r = {}
+    for i = 1, 5 do
+        r["p" .. i] = {x, 44 * k, x + bw, 44 * k + bh}
+        x = x + bw + gap
+    end
+    r.exit = {x, 44 * k, x + ew, 44 * k + bh}
     return r
 end
 
@@ -2177,6 +2207,11 @@ local function hit(x, y)
     if ts_visible() then
         for name, r in pairs(ts_layout(w, h, k)) do
             if name ~= "time" and inside(r, x, y) then return "ts", name end
+        end
+    end
+    if stats.on then
+        for name, r in pairs(st_layout(w, h, k)) do
+            if inside(r, x, y) then return "st", name end
         end
     end
     return nil
@@ -2258,6 +2293,16 @@ local function ts_draw(ln, w, h, k, mx, my)
         fmt_behind(live and 0 or ts.behind), live and "D0D0D0" or ACC)
 end
 
+local function st_draw(ln, w, h, k, mx, my)
+    for name, r in pairs(st_layout(w, h, k)) do
+        local hot = inside(r, mx, my)
+        ln[#ln + 1] = rect(r[1], r[2], r[3], r[4], hot and "808080" or "000000", hot and "50" or "70")
+        local cur = name == "p" .. stats.page
+        ln[#ln + 1] = text((r[1] + r[3]) / 2, (r[2] + r[4]) / 2, 5, 16 * k,
+            name == "exit" and "Exit" or name:sub(2), cur and ACC or "FFFFFF")
+    end
+end
+
 local function build_items(kind)
     local out, any = {}, false
     for _, t in ipairs(mp.get_property_native("track-list") or {}) do
@@ -2278,7 +2323,7 @@ end
 local function render()
     local w, h, k = geom()
     local tsv = ts_visible()
-    if not w or not (shown or tsv) then
+    if not w or not (shown or tsv or stats.on) then
         ov:remove()
         return
     end
@@ -2292,12 +2337,14 @@ local function render()
             if t.type == "sub" and t.selected then sub_on = true end
         end
         local muted = mp.get_property_bool("mute", false)
-        for _, name in ipairs({"sub", "audio", "spk"}) do
+        for _, name in ipairs({"info", "sub", "audio", "spk"}) do
             local r = bars[name]
             local hot = inside(r, mx, my) or menu == name
             ln[#ln + 1] = rect(r[1], r[2], r[3], r[4], hot and "808080" or "000000", hot and "50" or "70")
             local cx, cy = (r[1] + r[3]) / 2, (r[2] + r[4]) / 2
-            if name == "sub" then
+            if name == "info" then
+                ln[#ln + 1] = text(cx, cy, 5, 22 * k, "i", stats.on and ACC or "FFFFFF")
+            elseif name == "sub" then
                 ln[#ln + 1] = text(cx, cy, 5, 17 * k, "CC", sub_on and ACC or "FFFFFF")
             elseif name == "audio" then
                 ln[#ln + 1] = text(cx, cy, 5, 22 * k, "♪", "FFFFFF")
@@ -2318,6 +2365,7 @@ local function render()
         end
     end
     if tsv then ts_draw(ln, w, h, k, mx, my) end
+    if stats.on then st_draw(ln, w, h, k, mx, my) end
     ov.data = table.concat(ln, "\n")
     ov:update()
 end
@@ -2409,7 +2457,7 @@ local function ts_tick()
     local vis = ts_visible()
     if vis or ts_drawn then
         render()
-        if not vis then
+        if not vis and not stats.on then
             set_hot(false)
             last_over = false
         end
@@ -2435,7 +2483,11 @@ end
 -- mișcarea mouse-ului NU mai arată bara (apare doar la click dreapta); aici doar o ținem vie și urmărim hover-ul
 mp.observe_property("mouse-pos", "native", function(_, pos)
     if not pos then return end
-    if not shown and not ts_visible() then return end
+    if not shown and not ts_visible() and not stats.on then
+        set_hot(false)
+        last_over = false
+        return
+    end
     if not pos.hover then
         set_hot(false)
         return
@@ -2447,6 +2499,33 @@ mp.observe_property("mouse-pos", "native", function(_, pos)
     last_over = over
 end)
 
+-- Informații native mpv (stats.lua). `display-page-N` arată pagina doar câteva secunde (oneshot), deci pentru afișare
+-- permanentă: se deschid cu `display-stats-toggle` (rămân până la a doua apăsare) și paginile se schimbă cu tastele
+-- paginilor (1-5) pe care stats le ascultă cât sunt afișate. La ieșire revenim la pagina 1, ca deschiderea următoare
+-- să înceapă mereu de acolo.
+local function stats_open(page)
+    if not stats.on then
+        mp.commandv("script-binding", "stats/display-stats-toggle")
+        stats.on, stats.page = true, 1
+    end
+    if page ~= stats.page then
+        mp.commandv("keypress", tostring(page))
+        stats.page = page
+    end
+    render()
+end
+
+local function stats_exit()
+    if stats.on then
+        if stats.page ~= 1 then mp.commandv("keypress", "1") end
+        mp.commandv("script-binding", "stats/display-stats-toggle")
+    end
+    stats.on, stats.page = false, 1
+    set_hot(false)
+    last_over = false
+    render()
+end
+
 local function on_click()
     local x, y = mp.get_mouse_pos()
     local kind, v = hit(x, y)
@@ -2454,12 +2533,19 @@ local function on_click()
         ts_act(v, x)
         return
     end
+    if kind == "st" then
+        if v == "exit" then stats_exit() else stats_open(tonumber(v:sub(2))) end
+        return
+    end
     if not shown then return end
     if kind == "row" then
         apply(menu, v)
         menu = nil
     elseif kind == "btn" then
-        if v == "spk" then
+        if v == "info" then
+            menu = nil
+            if stats.on then stats_exit() else stats_open(1) end
+        elseif v == "spk" then
             mp.commandv("script-message", "toggle-mute")     -- mute-ul îl face programul (aceeași stare ca rotița de volum)
             menu = nil
         elseif menu == v then
@@ -3209,18 +3295,118 @@ def validate_mpv_conf(mpv_cmd, conf_text, timeout=10):
 IPC_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "app/io.mpv.Mpv"
 GPU_CONTEXT = os.environ.get("TELEOPS_GPU_CONTEXT", "x11egl")   # mpv încorporat cere X11 (XWayland sub Wayland)
 TIMESHIFT_DIR = Path.home() / ".cache" / "TeleopsDVB" / "timeshift"     # bufferul Timeshift de pe disc (îl șterge mpv la ieșire)
-TIMESHIFT_SIZES = (512, 1024, 2048)         # MB: alegerile din setări (se aplică la --demuxer-max-bytes și --demuxer-max-back-bytes)
+# mpv din Flatpak nu vede ~/.cache: în sandbox are doar propriul director de cache (același drum pe gazdă și în sandbox),
+# altfel nu poate crea fișierul bufferului și cade în tăcere pe memorie (în info mpv: „Disk Cache: (disabled)”)
+TIMESHIFT_DIR_FLATPAK = Path.home() / ".var" / "app" / "io.mpv.Mpv" / "cache" / "TeleopsDVB" / "timeshift"
+
+
+def timeshift_dir(mpv_cmd):
+    """Directorul bufferului de pe disc, vizibil de mpv-ul lansat cu `mpv_cmd`."""
+    return TIMESHIFT_DIR_FLATPAK if mpv_cmd and Path(str(mpv_cmd[0])).name == "flatpak" else TIMESHIFT_DIR
+TIMESHIFT_SIZES = (512, 1024, 2048, 4096)
+TIMESHIFT_RAM_MAX = 1024                    # MB: limita bufferului în RAM         # MB: alegerile din setări (se aplică la --demuxer-max-bytes și --demuxer-max-back-bytes)
 FEED_CHUNKS = 512                           # Timeshift: câte bucăți de 64 KiB (~32 MiB) așteaptă la mpv în pauză lungă
 
 
-def clean_timeshift_dir():
-    """Șterge resturile bufferului (rămase dacă mpv a fost oprit brusc). Apelat la pornire și la ieșire: o singură instanță rulează."""
+_FP_WRITE_CACHE = {}
+_MPV_OPTS, _MPV_OPTS_LOCK = {}, threading.Lock()
+
+
+def mpv_options(mpv_cmd):
+    """Numele opțiunilor cunoscute de mpv-ul lansat cu `mpv_cmd` (din `--list-options`), ținute minte; None dacă nu se poate afla.
+    Contează pentru bufferul Timeshift pe disc: `--demuxer-cache-dir` există abia din mpv 0.37 (înainte: `--cache-dir`),
+    iar o opțiune necunoscută face mpv-ul să nu pornească deloc."""
+    key = tuple(mpv_cmd)
+    with _MPV_OPTS_LOCK:
+        if key not in _MPV_OPTS:
+            try:
+                out = subprocess.run([*mpv_cmd, "--no-config", "--list-options"], capture_output=True, text=True, timeout=20,
+                                     env=get_clean_env(), stdin=subprocess.DEVNULL).stdout
+                _MPV_OPTS[key] = set(re.findall(r"^\s*--([a-z0-9-]+)", out, re.M)) or None
+            except (OSError, subprocess.SubprocessError):
+                _MPV_OPTS[key] = None
+        return _MPV_OPTS[key]
+
+
+def _xdg_dir(name):
     try:
-        for f in TIMESHIFT_DIR.iterdir():
-            if f.is_file():
-                f.unlink(missing_ok=True)
-    except OSError:
+        out = subprocess.run(["xdg-user-dir", name], capture_output=True, text=True, timeout=3, env=get_clean_env()).stdout.strip()
+        if out:
+            return Path(out)
+    except (OSError, subprocess.SubprocessError):
         pass
+    return Path.home() / name.capitalize()
+
+
+def flatpak_can_write(path):
+    """True dacă mpv din Flatpak poate scrie în `path`: după permisiunile aplicației (`filesystems=`) și override-urile
+    utilizatorului. Verificare aproximativă (host, home, xdg-*, căi); la îndoială, False."""
+    path = Path(path)
+    key = str(path)
+    if key in _FP_WRITE_CACHE:
+        return _FP_WRITE_CACHE[key]
+    entries = []
+    for cmd in (["flatpak", "info", "--show-permissions", "io.mpv.Mpv"], ["flatpak", "override", "--user", "--show", "io.mpv.Mpv"]):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=get_clean_env()).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in out.splitlines():
+            if line.startswith("filesystems="):
+                entries += [e for e in line.split("=", 1)[1].split(";") if e]
+    xdg = {"xdg-videos": "VIDEOS", "xdg-documents": "DOCUMENTS", "xdg-download": "DOWNLOAD", "xdg-music": "MUSIC",
+           "xdg-pictures": "PICTURES", "xdg-desktop": "DESKTOP"}
+    ok = False
+    for e in entries:
+        neg = e.startswith("!")
+        name, _, mode = e.lstrip("!").partition(":")
+        if name == "host":
+            base = Path("/")
+        elif name == "home":
+            base = Path.home()
+        elif name in xdg:
+            base = _xdg_dir(xdg[name])
+        elif name.startswith("~/"):
+            base = Path.home() / name[2:]
+        elif name.startswith("/"):
+            base = Path(name)
+        else:
+            continue
+        if base != path and base not in path.parents:
+            continue
+        ok = False if neg else mode not in ("ro",)
+    _FP_WRITE_CACHE[key] = ok
+    return ok
+
+
+def pick_timeshift_dir(mpv_cmd, wanted):
+    """(director, a_căzut_pe_cache). `wanted` = dosarul ales (înregistrări/timeshift); dacă mpv nu poate scrie acolo
+    (Flatpak fără acces, drepturi), bufferul merge în cache-ul programului."""
+    fallback = timeshift_dir(mpv_cmd)
+    flat = Path(str(mpv_cmd[0])).name == "flatpak" if mpv_cmd else False
+    if wanted and not (flat and not flatpak_can_write(wanted)):
+        try:
+            Path(wanted).mkdir(parents=True, exist_ok=True)
+            if os.access(wanted, os.W_OK):
+                return Path(wanted), False
+        except OSError:
+            pass
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback, bool(wanted)
+
+
+def clean_timeshift_dir(extra=None):
+    """Șterge resturile bufferului (rămase dacă mpv a fost oprit brusc). Apelat la pornire și la ieșire: o singură instanță rulează.
+    În dosarul înregistrărilor (`extra`) șterge doar fișierele de cache ale mpv (mpv-*)."""
+    for d, only_mpv in ((TIMESHIFT_DIR, False), (TIMESHIFT_DIR_FLATPAK, False), (extra, True)):
+        if d is None:
+            continue
+        try:
+            for f in Path(d).iterdir():
+                if f.is_file() and (not only_mpv or f.name.startswith("mpv-")):
+                    f.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class Streamer:
@@ -3231,11 +3417,13 @@ class Streamer:
             "vol-up": ("WHEEL_UP", "RIGHT"), "vol-down": ("WHEEL_DOWN", "LEFT"), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X"),
             "prev-channel": ("BS",), "jump-channel": ("j", "J"), "toggle-mute": ("m", "M"),
             "toggle-info": ("Ctrl+h", "Ctrl+H"),
-            "ch-up": ("UP",), "ch-down": ("DOWN",), "ch-enter": ("ENTER", "KP_ENTER")}
+            "ch-up": ("UP",), "ch-down": ("DOWN",), "ch-enter": ("ENTER", "KP_ENTER"), "ch-cancel": ("ESC",)}
 
-    def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None, tone=(0, 0), fast=False, timeshift=0):
+    def __init__(self, mpv_cmd, adapter, channel, sid, props, on_prop, get_lang_func=None, wid=None, on_msg=None, tone=(0, 0), fast=False, timeshift=0, ts_disk=True, ts_dir=None):
         self.props, self.on_prop, self.conn = dict(props), on_prop, None
         self.timeshift = int(timeshift or 0)        # MB de buffer Timeshift (0 = oprit)
+        self.ts_fallback = False                    # bufferul pe disc a trebuit mutat în cache-ul programului
+        self.ts_nodisk = False                      # mpv-ul instalat nu știe cache pe disc: Timeshift a trecut pe RAM
         self._feed = queue.Queue(FEED_CHUNKS) if self.timeshift else None
         self.tone = tuple(tone)
         self.on_msg = on_msg or (lambda *_: None)
@@ -3264,11 +3452,21 @@ class Streamer:
         if fast:    # pornire rapidă: flux MPEG-TS cunoscut (fără ghicirea formatului), analiză scurtă; calitatea redării rămâne cea din mpv.conf
             mpv += ["--ytdl=no", "--demuxer=lavf", "--demuxer-lavf-format=mpegts",
                     "--demuxer-lavf-probesize=1500000", "--demuxer-lavf-analyzeduration=1"]
-        if self.timeshift:      # pauză / derulare la TV live: buffer mpv în RAM + pe disc, atât înainte, cât și în urma redării
-            TIMESHIFT_DIR.mkdir(parents=True, exist_ok=True)
+        if self.timeshift:      # pauză / derulare la TV live: buffer mpv (RAM sau disc), atât înainte, cât și în urma redării
+            opts = mpv_options(mpv_cmd) if ts_disk else None          # None = nu știm: presupunem un mpv recent
+            if ts_disk and opts is not None and "cache-on-disk" not in opts:
+                ts_disk, self.ts_nodisk = False, True                 # mpv vechi, fără cache pe disc: RAM, cu limita RAM
+            if not ts_disk:
+                self.timeshift = min(self.timeshift, TIMESHIFT_RAM_MAX)
             size = f"{self.timeshift}MiB"
             mpv += ["--cache=yes", f"--demuxer-max-bytes={size}", f"--demuxer-max-back-bytes={size}",
-                    "--cache-on-disk=yes", f"--demuxer-cache-dir={TIMESHIFT_DIR}"]
+                    "--script-opts-append=teleops-ts=1"]         # spune scriptului Lua să afișeze bara Timeshift
+            if ts_disk:
+                ts_path, self.ts_fallback = pick_timeshift_dir(mpv_cmd, ts_dir)
+                old_name = opts is not None and "demuxer-cache-dir" not in opts and "cache-dir" in opts    # mpv < 0.37
+                mpv += ["--cache-on-disk=yes", f"--{'cache-dir' if old_name else 'demuxer-cache-dir'}={ts_path}"]
+            else:
+                mpv.append("--cache-on-disk=no")
         env = get_clean_env()
         if wid:   # încorporat în fereastra Tk: --wid există doar pe X11 (XWayland), deci interzicem backend-ul Wayland
             mpv += [f"--wid={wid}", f"--gpu-context={GPU_CONTEXT}", "--window-dragging=no", "--osc=no", "--osd-bar=no", f"--script={OSC_PATH}"]
@@ -3586,7 +3784,7 @@ HOTKEYS = (("hk_play", "hk_play_k"), ("hk_fav", "hk_fav_k"), ("hk_search", "hk_s
            ("hk_osc", "hk_osc_k"), ("hk_vol", "hk_vol_k"), ("hk_knob", "hk_knob_k"), ("hk_mute", "hk_mute_k"), ("hk_fs", "hk_fs_k"), ("hk_ui", "hk_ui_k"),   # video
            ("hk_chan", "hk_chan_k"), ("hk_volkeys", "hk_volkeys_k"),                                                   # video: canal / volum cu tastele
            ("hk_ts_pause", "hk_ts_pause_k"), ("hk_ts_seek", "hk_ts_seek_k"), ("hk_ts_live", "hk_ts_live_k"),
-           ("hk_ts_bar", "hk_ts_bar_k"),                                                                               # video: Timeshift
+           ("hk_ts_bar", "hk_ts_bar_k"), ("hk_stats", "hk_stats_k"),                                                                               # video: Timeshift
            ("hk_quit", "hk_quit_k"))                                                            # program
 
 
@@ -3907,6 +4105,7 @@ class EpgWindow(tk.Toplevel):
     def __init__(self, host):
         super().__init__(host.root)
         self.title(host.t("epg_btn"))
+        self.transient(host.root)               # ca „Despre” și „Tuner TV”: centrată pe fereastra programului, deasupra ei
         self.geometry("640x630")
         self.minsize(600, 590)
 
@@ -4162,6 +4361,15 @@ class EpgWindow(tk.Toplevel):
         if not host.stream and host.my_schedules():          # fără redare, programul canalului e gol: începem cu programările
             nb.select(my)
         refresh()
+
+        # poziția: la sfârșit, după ce toate widgeturile există, ca la „Despre” (altfel unele manageri de ferestre o ignoră)
+        r = host.root
+        r.update_idletasks()
+        self.update_idletasks()
+        x = r.winfo_rootx() + max(0, (r.winfo_width() - 640) // 2)
+        y = r.winfo_rooty() + max(0, (r.winfo_height() - 630) // 2)
+        y = max(0, min(y, self.winfo_screenheight() - 630 - 40))
+        self.geometry(f"640x630+{x}+{y}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -4445,7 +4653,11 @@ class AboutDialog(tk.Toplevel):
         t1.rowconfigure(2, weight=1)
         mid = ttk.Frame(t1)
         mid.grid(row=1, column=0)
-        self._embossed(mid, TITLE, host.bg_grey).pack(pady=(0, 2))
+        pf, ps = tkfont.Font(family="DejaVu Sans", size=-36, weight="bold"), 3.0       # aceeași plăcuță ca pe difuzor, de 3 ori mai mare
+        pw, ph = int(pf.measure(SpeakerGrille.TEXT) + 34 * ps) + 12, int(24 * ps) + 16
+        plate = tk.Canvas(mid, width=pw, height=ph, bg=host.bg_grey, highlightthickness=0)
+        draw_plate(plate, pw / 2, ph / 2, pf, SpeakerGrille.TEXT, ps)
+        plate.pack(pady=(0, 10))
         ttk.Label(mid, text=host.t("about_version").format(v=VERSION), style="Hk.TLabel", anchor="center").pack(pady=(0, 10))
         for key in ("about_desc", "about_dev"):
             ttk.Label(mid, text=host.t(key), style="Hk.TLabel", wraplength=430, justify="center",
@@ -4562,16 +4774,22 @@ class TunerWindow(tk.Toplevel):
         self.cancel_btn = ttk.Button(self.scan_zone, text=host.t("scan_cancel"), command=host.cancel_scan)
         host.tr.append((self.cancel_btn, "scan_cancel"))
 
-        # dimensiunea fixă: cât încape tot, cu bara de progres și „Anulează” afișate (apoi le ascundem, zona rămâne rezervată)
-        self.progress_bar.pack(fill="x", pady=5)
-        self.cancel_btn.pack(fill="x", pady=(0, 5))
-        self.update_idletasks()
-        self.scan_zone.configure(height=self.scan_zone.winfo_reqheight())
-        self.scan_zone.pack_propagate(False)
+        self.fit()
+
+    def fit(self):
+        """Înălțime fixă: cât încape tot, cu bara de progres și „Anulează” afișate. Se recalculează la fiecare afișare,
+        pentru că tema (butoane mai înalte în dark) și fonturile schimbă dimensiunile."""
+        self.scan_zone.pack_propagate(True)
+        self.scan_zone.configure(height=1)
         self.progress_bar.pack_forget()
         self.cancel_btn.pack_forget()
+        self.progress_bar.configure(length=10)
         self.update_idletasks()
-        self.height = self.winfo_reqheight()
+        zone = (self.progress_bar.winfo_reqheight() + 10) + (self.cancel_btn.winfo_reqheight() + 10) + 6
+        self.scan_zone.configure(height=zone)
+        self.scan_zone.pack_propagate(False)
+        self.update_idletasks()
+        self.height = self.winfo_reqheight() + 16
 
     def _btn(self, parent, key, cmd, side="top"):
         w = ttk.Button(parent, text=self.host.t(key), command=cmd)
@@ -4580,12 +4798,16 @@ class TunerWindow(tk.Toplevel):
         return w
 
     def show(self):
+        scanning = self.progress_bar.winfo_ismapped()
+        self.fit()
+        if scanning:
+            self.progress_bar.pack(fill="x", pady=5)
+            self.cancel_btn.pack(fill="x", pady=(0, 5))
         r = self.host.root
         r.update_idletasks()
         x = r.winfo_rootx() + max(0, (r.winfo_width() - TUNER_W) // 2)
         y = r.winfo_rooty() + 60
-        h = self.height + 20
-        self.geometry(f"{TUNER_W}x{h}+{x}+{y}")
+        self.geometry(f"{TUNER_W}x{self.height}+{x}+{y}")
         self.deiconify()
         self.lift()
         self.focus_set()
@@ -5428,6 +5650,30 @@ def _speaker_png(D):
     return _SPK_CACHE[D]
 
 
+def draw_plate(cv, cx, cy, font, text, s=1.0):
+    """Plăcuța metalică argintie „Teleops DVB” (față cu degrade, muchii luminate, două nituri, text gravat), centrată în (cx, cy).
+    `s` = scara: 1 pe difuzor, mai mare în fereastra „Despre” (`font` trebuie să fie deja scalat)."""
+    pw, ph = font.measure(text) + 34 * s, 24 * s
+    x0, y0 = cx - pw / 2, cy - ph / 2
+    cv.create_rectangle(x0 + 2 * s, y0 + 3 * s, x0 + pw + 2 * s, y0 + ph + 3 * s, fill="#050506", outline="")   # umbra
+    n = max(2, int(ph))
+    for i in range(n):                                                                       # față argintie cu degrade vertical
+        cv.create_line(x0, y0 + i * ph / n, x0 + pw, y0 + i * ph / n, fill=SpeakerGrille._grey(218 - 52 * i / (n - 1)),
+                       width=max(1, int(round(ph / n)) + (1 if s > 1 else 0)))
+    cv.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="", outline="#2e2f32")                # contur închis
+    cv.create_line(x0 + 1, y0 + 1, x0 + pw - 1, y0 + 1, fill="#f4f5f7")                      # muchie luminată sus
+    cv.create_line(x0 + 1, y0 + 1, x0 + 1, y0 + ph - 1, fill="#e6e7ea")                      # și în stânga
+    cv.create_line(x0 + 1, y0 + ph - 1, x0 + pw - 1, y0 + ph - 1, fill="#76777b")            # umbră jos
+    cv.create_line(x0 + pw - 1, y0 + 1, x0 + pw - 1, y0 + ph - 1, fill="#86878b")            # și în dreapta
+    for sx in (x0 + 8 * s, x0 + pw - 8 * s):                                                 # două nituri
+        cv.create_oval(sx - 3 * s, cy - 3 * s, sx + 3 * s, cy + 3 * s, fill="#8d8e92", outline="#3a3b3e")
+        cv.create_oval(sx - 1.8 * s, cy - 1.8 * s, sx + 1.8 * s, cy + 1.8 * s, fill="#242426", outline="")
+        cv.create_line(sx - 2 * s, cy + 3.6 * s, sx + 2 * s, cy + 3.6 * s, fill="#f0f1f3")
+    off = max(1, round(s))
+    cv.create_text(cx + off, cy + off, text=text, font=font, fill="#f2f3f5")                 # text gravat
+    cv.create_text(cx, cy, text=text, font=font, fill="#2c2d31")
+
+
 class SpeakerGrille(tk.Canvas):
     """Difuzorul retro cu grilaj, cu emblema „Teleops DVB” pusă pe mijlocul lui, ca o plăcuță metalică argintie (aceleași
     nuanțe ca inelul difuzorului) prinsă cu două nituri. Are MĂRIME FIXĂ (nu se redimensionează niciodată), centrat doar
@@ -5456,22 +5702,7 @@ class SpeakerGrille(tk.Canvas):
         top = self.MARGIN                                                                        # difuzor lipit sus, nu centrat
         self.create_image(w / 2, top, image=self._img, anchor="n")
         cx, cy = w / 2, top + self.SIZE / 2                                                      # emblema, pe mijlocul difuzorului
-        pw, ph = self._tf.measure(self.TEXT) + 34, self.PLATE_H
-        x0, y0 = cx - pw / 2, cy - ph / 2
-        self.create_rectangle(x0 + 2, y0 + 3, x0 + pw + 2, y0 + ph + 3, fill="#050506", outline="")   # umbra pe grilaj
-        for i in range(ph):                                                                      # față argintie cu degrade vertical
-            self.create_line(x0, y0 + i, x0 + pw, y0 + i, fill=self._grey(218 - 52 * i / (ph - 1)))
-        self.create_rectangle(x0, y0, x0 + pw, y0 + ph, fill="", outline="#2e2f32")              # contur închis
-        self.create_line(x0 + 1, y0 + 1, x0 + pw - 1, y0 + 1, fill="#f4f5f7")                    # muchie luminată sus
-        self.create_line(x0 + 1, y0 + 1, x0 + 1, y0 + ph - 1, fill="#e6e7ea")                    # și în stânga (lumina vine din stânga-sus)
-        self.create_line(x0 + 1, y0 + ph - 1, x0 + pw - 1, y0 + ph - 1, fill="#76777b")          # umbră jos
-        self.create_line(x0 + pw - 1, y0 + 1, x0 + pw - 1, y0 + ph - 1, fill="#86878b")          # și în dreapta
-        for sx in (x0 + 8, x0 + pw - 8):                                                         # două nituri, ca șuruburile inelului
-            self.create_oval(sx - 3, cy - 3, sx + 3, cy + 3, fill="#8d8e92", outline="#3a3b3e")
-            self.create_oval(sx - 1.8, cy - 1.8, sx + 1.8, cy + 1.8, fill="#242426", outline="")
-            self.create_line(sx - 2, cy + 3.6, sx + 2, cy + 3.6, fill="#f0f1f3")                 # reflexie mică dedesubt
-        self.create_text(cx + 1, cy + 1, text=self.TEXT, font=self._tf, fill="#f2f3f5")          # text gravat
-        self.create_text(cx, cy, text=self.TEXT, font=self._tf, fill="#2c2d31")
+        draw_plate(self, cx, cy, self._tf, self.TEXT)
 
 
 class JumpDialog(tk.Frame):
@@ -5811,16 +6042,27 @@ class Main:
         cb5.pack(fill="x", pady=(5, 0))
         self.tr.append((cb5, "ts_enable"))
         self.ts_tip = Tip(cb5, "", wrap=320)
+        self.ts_mode = "ram" if self.settings.get("timeshift_mode") == "ram" else "disk"
+        tmr = ttk.Frame(tc)
+        tmr.pack(fill="x", pady=(5, 0))
+        tml = ttk.Label(tmr)
+        tml.pack(side="left", padx=(0, 8))
+        self.tr.append((tml, "ts_mode_label"))
+        self.ts_mode_box = ttk.Combobox(tmr, state="readonly", font=self.f_norm)
+        self.ts_mode_box.pack(side="left", fill="x", expand=True)
+        self.ts_mode_box.bind("<<ComboboxSelected>>", self.on_ts_mode)
+        self._combos.append(self.ts_mode_box)
         tsr = ttk.Frame(tc)
         tsr.pack(fill="x", pady=(5, 0))
         tsl = ttk.Label(tsr)
         tsl.pack(side="left", padx=(0, 8))
         self.tr.append((tsl, "ts_size_label"))
-        self.ts_box = ttk.Combobox(tsr, state="readonly", font=self.f_norm, values=[f"{n} MB" for n in TIMESHIFT_SIZES])
+        self.ts_box = ttk.Combobox(tsr, state="readonly", font=self.f_norm)
         try:
-            self.ts_box.current(TIMESHIFT_SIZES.index(int(self.settings.get("timeshift_mb", TIMESHIFT_SIZES[0]))))
+            saved_mb = int(self.settings.get("timeshift_mb", TIMESHIFT_SIZES[0]))
         except (ValueError, TypeError):
-            self.ts_box.current(0)
+            saved_mb = TIMESHIFT_SIZES[0]
+        self._fill_ts_sizes(saved_mb)
         self.ts_box.pack(side="left", fill="x", expand=True)
         self.ts_box.bind("<<ComboboxSelected>>", self.on_timeshift)
         self._combos.append(self.ts_box)
@@ -5983,6 +6225,8 @@ class Main:
             root.after(400, self.apply_borderless)
         self.layout()
         self.apply_theme()
+        threading.Thread(target=mpv_options, args=(self.mpv_cmd,), daemon=True).start()
+        clean_timeshift_dir(self.ts_dir())      # resturi ale bufferului din dosarul înregistrărilor (mpv oprit brusc)
         root.after(20000, self._theme_poll)
         root.after(250, self.tick)
         root.after(100, self.poll_events)
@@ -6523,9 +6767,11 @@ class Main:
         elif msg in ("vol-up", "vol-down"):
             self.wheel_volume(VOL_WHEEL_STEP if msg == "vol-up" else -VOL_WHEEL_STEP)
         elif msg in ("ch-up", "ch-down"):
-            self.pick_step(-1 if msg == "ch-up" else 1)
+            self.pick_step(1 if msg == "ch-up" else -1)
         elif msg == "ch-enter":
             self.pick_commit()
+        elif msg == "ch-cancel":
+            self.pick_abort()
 
     # ---- mutarea ferestrei prin tragere (fără titlebar)
 
@@ -6588,6 +6834,7 @@ class Main:
         self._draw_poster()
         self._sync_country_box()
         self._sync_theme_box()
+        self._sync_ts_mode_box()
         self.ts_tip.text = self.t("ts_tip")
         self.tuner_win.title(self.t("tuner_title"))
         self._sync_stop_btn()
@@ -6632,6 +6879,15 @@ class Main:
         if name and name != self.cur:
             self.try_tune(name)
 
+    def pick_abort(self):
+        """Esc: renunță la canalul ales cu ↑/↓ (rămâne cel curent); fără alegere în curs, nu face nimic."""
+        if not self._pick:
+            return
+        self._pick_cancel()
+        if self.stream:
+            self.stream.hide_banner()
+        self.select_current()
+
     def _pick_cancel(self):
         self._pick = None
         if self._pick_job:
@@ -6639,16 +6895,42 @@ class Main:
             self._pick_job = None
 
     # ---- Timeshift
+    def _ts_sizes(self):
+        """Mărimile permise de modul ales: în RAM cel mult TIMESHIFT_RAM_MAX."""
+        return tuple(n for n in TIMESHIFT_SIZES if self.ts_mode == "disk" or n <= TIMESHIFT_RAM_MAX)
+
+    def _fill_ts_sizes(self, mb):
+        """Pune în listă mărimile modului curent și alege `mb` (sau cea mai apropiată permisă)."""
+        sizes = self._ts_sizes()
+        self.ts_box.configure(values=[f"{n} MB" for n in sizes])
+        self.ts_box.current(sizes.index(mb) if mb in sizes else (len(sizes) - 1 if mb > sizes[-1] else 0))
+
     def _ts_size(self):
-        i = self.ts_box.current()
-        return TIMESHIFT_SIZES[i] if 0 <= i < len(TIMESHIFT_SIZES) else TIMESHIFT_SIZES[0]
+        sizes, i = self._ts_sizes(), self.ts_box.current()
+        return sizes[i] if 0 <= i < len(sizes) else sizes[0]
+
+    def _sync_ts_mode_box(self):
+        self.ts_mode_box.configure(values=[self.t("ts_mode_disk"), self.t("ts_mode_ram")])
+        self.ts_mode_box.current(1 if self.ts_mode == "ram" else 0)
+
+    def on_ts_mode(self, _=None):
+        prev = self._ts_size()
+        self.ts_mode = "ram" if self.ts_mode_box.current() == 1 else "disk"
+        self._fill_ts_sizes(prev)
+        self.on_timeshift(_)
+
+    def ts_dir(self):
+        """Unde ține mpv bufferul pe disc: dosarul „timeshift” din dosarul înregistrărilor."""
+        return self.rec_dir / "timeshift"
 
     def ts_mb(self):
         """MB de buffer pentru Streamer; 0 = Timeshift oprit."""
         return self._ts_size() if self.ts_var.get() else 0
 
     def _sync_ts_box(self):
-        self.ts_box.configure(state="readonly" if self.ts_var.get() else "disabled")
+        st = "readonly" if self.ts_var.get() else "disabled"
+        self.ts_box.configure(state=st)
+        self.ts_mode_box.configure(state=st)
 
     def on_timeshift(self, _=None):
         self._sync_ts_box()
@@ -7353,7 +7635,10 @@ class Main:
                                    wid=self.video.winfo_id(),
                                    on_msg=lambda m: self.events.put(lambda: self.on_ui_msg(m)),
                                    tone=(self.bass, self.treble), fast=bool(self.fast_var.get()),
-                                   timeshift=self.ts_mb())
+                                   timeshift=self.ts_mb(), ts_disk=self.ts_mode == "disk", ts_dir=self.ts_dir())
+            for flag, key in ((self.stream.ts_fallback, "ts_fp_fallback"), (self.stream.ts_nodisk, "ts_no_disk")):
+                if flag:                        # ne-am abătut de la setarea aleasă: spunem de ce
+                    self.root.after(4000, lambda s=self.stream, k=key: s is self.stream and s.toast(self.t(k), 9000))
             self.cur = self.last_channel = name
             self.select_current()
         except Exception as e:
@@ -7560,9 +7845,10 @@ class Main:
             "theme": self.theme_mode,
             "timeshift": bool(self.ts_var.get()),
             "timeshift_mb": self._ts_size(),
+            "timeshift_mode": self.ts_mode,
         })
         self.stop()
-        clean_timeshift_dir()
+        clean_timeshift_dir(self.ts_dir())
         self.scan_cancelled = True
         if self.scan_proc:
             self.scan_proc.kill()
