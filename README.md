@@ -10,7 +10,7 @@
 
 - 📺 **Embedded MPV Player Integration:** High-performance video and audio playback embedded into the Tkinter window via `--wid` and controlled over an IPC socket, including a custom mini-OSC overlay (subtitles, audio tracks, mute) and signal info overlay, with broad compatibility across older and newer MPV versions as well as Flatpak sandboxes.
 
-- ⏪ **Live TV Timeshift (Pause & Rewind):** Pause live television, rewind, or fast-forward using an adjustable RAM and disk buffer (`512 MB`, `1024 MB`, `2048 MB` or `2048 MB`, with automatic disk fallback when RAM is limited), complete with a dedicated on-screen control bar and automatic cleanup of leftover cache files.
+- ⏪ **Live TV Timeshift (Pause & Rewind):** Pause live television, rewind, or fast-forward using an adjustable RAM and disk buffer (`512 MB`, `1024 MB`, `2048 MB` or `4096 MB`, with automatic disk fallback when RAM is limited), complete with a dedicated on-screen control bar and automatic cleanup of leftover cache files.
 
 - 📋 **Live & Full EPG (TV Guide) & Schedule Manager:** Real-time display of current and upcoming programs with progress bars and remaining time on the MPV OSD, live now/next display in the side panel, plus a dedicated EPG window featuring programme descriptions and a **"My Schedule"** tab to view, manage, or cancel all upcoming scheduled recordings and channel-switch reminders in one place.
 
