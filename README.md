@@ -8,9 +8,9 @@
 
 - 📡 **Dedicated TV Tuner & Scrambled Detection:** Manage tuner selection, full-spectrum DVB-C (Cable) and DVB-T/T2 (Terrestrial) channel scanning (`dvbv5-scan`) with non-blocking background tuner warm-up, and automatic/manual scrambled channel detection (`🔑`) based on actual TS scrambling bits and SDT service types in a clean, dedicated **TV Tuner** window.
 
-- 📺 **Embedded MPV Player Integration:** High-performance video and audio playback embedded into the Tkinter window via `--wid` and controlled over an IPC socket, including a custom mini-OSC overlay (subtitles, audio tracks, mute) and signal info overlay.
+- 📺 **Embedded MPV Player Integration:** High-performance video and audio playback embedded into the Tkinter window via `--wid` and controlled over an IPC socket, including a custom mini-OSC overlay (subtitles, audio tracks, mute) and signal info overlay, with broad compatibility across older and newer MPV versions as well as Flatpak sandboxes.
 
-- ⏪ **Live TV Timeshift (Pause & Rewind):** Pause live television, rewind, or fast-forward using an adjustable RAM and disk buffer (`512 MB`, `1024 MB`, or `2048 MB`), complete with a dedicated on-screen control bar and automatic cleanup of leftover cache files.
+- ⏪ **Live TV Timeshift (Pause & Rewind):** Pause live television, rewind, or fast-forward using an adjustable RAM and disk buffer (`512 MB`, `1024 MB`, or `2048 MB`, with automatic disk fallback when RAM is limited), complete with a dedicated on-screen control bar and automatic cleanup of leftover cache files.
 
 - 📋 **Live & Full EPG (TV Guide) & Schedule Manager:** Real-time display of current and upcoming programs with progress bars and remaining time on the MPV OSD, live now/next display in the side panel, plus a dedicated EPG window featuring programme descriptions and a **"My Schedule"** tab to view, manage, or cancel all upcoming scheduled recordings and channel-switch reminders in one place.
 
@@ -18,13 +18,13 @@
 
 - ⏰ **“I Want to Watch” Reminders:** Schedule automatic channel switching (`1 min` before start) from the EPG when watching another channel, respecting active or conflicting scheduled recordings.
 
-- 🎛️ **DVB Subtitles & Retro Audio Controls:** Full support for DVB subtitles, preferred audio/subtitle languages, mute control, rotary amplifier-style knobs for **Volume**, **Bass**, and **Treble** (`±10 dB`) audio filtering, a retro speaker grille emblem in the channel info view, and an MPV configuration dialog (`mpv.conf` block management + config validation).
+- 🎛️ **DVB Subtitles, Retro Audio Controls & Expanded MPV Settings:** Full support for DVB subtitles, preferred audio/subtitle languages, mute control, rotary amplifier-style knobs for **Volume**, **Bass**, and **Treble** (`±10 dB`) audio filtering, a retro speaker grille emblem in the channel info view, and an expanded MPV configuration dialog (covering video, color, audio, subtitle, and stream options with safe `mpv.conf` updates and config validation).
 
-- 🖼️ **Channel Logos, Posters & Quick Surfing:** Optional channel logos (via `iptv-org` & TOT country detection, clickable in the info view to open the channel's Wikipedia page), movie/show posters (Apple/iTunes, IMDb, TVmaze, optional TMDB with IMDb link), Favorites (`★`), instant list search, a `J` quick-jump overlay, and video-overlay channel preview surfing with a countdown banner.
+- 🖼️ **Channel Logos, Posters, News Banner & Quick Surfing:** Optional channel logos (via `iptv-org` & TOT country detection, clickable in the info view to open the channel's Wikipedia page), movie/show posters (Apple/iTunes, IMDb, TVmaze, optional TMDB with clickable IMDb link), a dedicated news banner for news broadcasts, Favorites (`★`), instant list search, a `J` quick-jump overlay, and video-overlay channel zapping with a countdown banner (`Enter` to switch immediately, `Esc` to cancel).
 
 - 🎨 **Dark Mode & Automatic Theme Switching:** Includes a sleek Dark / Slate Hi-Fi theme alongside the classic light theme, plus an **Automatic** mode that follows your desktop system theme.
 
-- 💤 **System & Desktop Integration:** Single-instance lock, sleep/screensaver/display inhibition (D-Bus, `systemd-inhibit`, X11), borderless/frameless mode with edge resizing and drag-to-move, left/right video panel placement, optional autoplay of the last channel, fast channel switching with safe event handling, and interface support for **Romanian**, **English**, and **Italian**.
+- 💤 **System & Desktop Integration:** Single-instance lock, sleep/screensaver/display inhibition across desktop environments (D-Bus, `systemd-inhibit`, X11), borderless/frameless mode with edge resizing and drag-to-move, left/right video panel placement, optional autoplay of the last channel, fast non-blocking channel switching with a modular architecture, a one-click program reset option (preserving your recordings), and interface support for **Romanian**, **English**, and **Italian**.
 
 ---
 
@@ -72,7 +72,7 @@ chmod +x teleops.py
 | Action | Shortcut |
 |---|---|
 | Play channel | `Double click` / `Enter` |
-| Preview / surf channels (on video) | `↑` / `↓` (`Enter` to switch immediately) |
+| Preview / surf channels (on video) | `↑` / `↓` (`Enter` to switch immediately, `Esc` to cancel) |
 | Add / Remove Favorites | `CTRL + Left Click` |
 | Show/hide search | `Right Click on list` |
 | Jump to channel (quick search) | `J` |
