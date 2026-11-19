@@ -113,7 +113,7 @@ from tkinter import filedialog, messagebox, ttk
 # ──────────────────────────────────────────────────────────────────────────────
 
 TITLE = "Teleops DVB"
-VERSION = "4.6.1"
+VERSION = "4.7.0"
 WM_NAME, WM_CLASS = "teleops", "Teleops"   # WM_CLASS al ferestrei: GNOME/KDE îl potrivesc cu fișierul .desktop (iconiță în bara de activități)
 CONF_DIR = Path.home() / ".config" / "TeleopsDVB"
 CHANNELS = CONF_DIR / "channels.conf"
@@ -382,6 +382,7 @@ T = {  # cheie: (ro, en, it)
     "osc_off": ("Dezactivat", "Off", "Disattivato"),
     "quit_app": ("⏻ Închide programul", "⏻ Quit program", "⏻ Chiudi il programma"),
     "borderless": ("Fără margini și bară de titlu", "No window borders / titlebar", "Senza bordi e barra del titolo"),
+    "always_on_top": ("Mereu deasupra", "Always on top", "Sempre in primo piano"),
     "x11_na": ("Funcția cere X11/XWayland (libX11 indisponibil).", "This needs X11/XWayland (libX11 unavailable).", "Richiede X11/XWayland (libX11 non disponibile)."),
     "side_btn": ("⇄ Mută panoul GUI", "⇄ Move GUI panel", "⇄ Sposta pannello GUI"),
     # Localizare OSD MPV
@@ -2606,6 +2607,16 @@ for _, key in ipairs(noseek) do
     mp.add_forced_key_binding(key, "teleops-noseek-" .. key, function() end)
 end
 
+-- ←/→ = volum. Trimitem și repetările (tasta ținută apăsată); ritmul îl stabilește programul (VOL_HOLD_*).
+for key, dir in pairs({LEFT = "down", RIGHT = "up"}) do
+    mp.add_forced_key_binding(key, "teleops-vol-" .. dir, function(ev)
+        local e = (ev and ev.event) or "press"
+        if e ~= "up" then
+            mp.commandv("script-message", "vol-key", dir, e == "repeat" and "1" or "0")
+        end
+    end, {complex = true})
+end
+
 -- Informații despre semnal (stânga jos): rezoluție / scanare / codec video și codec / canale / frecvență audio.
 -- Apar când canalul a pornit și se ascund după 15 s; tasta I le arată din nou.
 local INFO_SECS = 15
@@ -3414,7 +3425,7 @@ class Streamer:
     # mesaj -> tastele mpv care îl trimit (cât timp mpv are focusul, Tk nu primește tastele; „i” simplu rămâne nativ mpv)
     KEYS = {"show-info-osd": ("i", "I"), "toggle-ui": (".", "MBTN_LEFT_DBL"), "toggle-fs": ("f", "F", "F11"),
             "toggle-rec": ("Ctrl+r", "Ctrl+R"), "show-epg": ("Ctrl+i", "Ctrl+I"),
-            "vol-up": ("WHEEL_UP", "RIGHT"), "vol-down": ("WHEEL_DOWN", "LEFT"), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X"),
+            "vol-up": ("WHEEL_UP",), "vol-down": ("WHEEL_DOWN",), "quit-app": ("Ctrl+X", "Ctrl+Shift+x", "Ctrl+Shift+X"),
             "prev-channel": ("BS",), "jump-channel": ("j", "J"), "toggle-mute": ("m", "M"),
             "toggle-info": ("Ctrl+h", "Ctrl+H"),
             "ch-up": ("UP",), "ch-down": ("DOWN",), "ch-enter": ("ENTER", "KP_ENTER"), "ch-cancel": ("ESC",)}
@@ -3598,6 +3609,7 @@ class Streamer:
                             self.show_channel_info()
                         elif args[0] == "teleops-osc-hot": self.osc_hot = args[1:2] == ["1"]
                         elif args[0] == "teleops-key" and len(args) > 1: self.on_msg("key:" + str(args[1]))
+                        elif args[0] == "vol-key" and len(args) > 2: self.on_msg(f"vol-key:{args[1]}:{args[2]}")
                         elif args[0] in self.KEYS: self.on_msg(args[0])
                     elif ev == "property-change" and e.get("data") is not None:
                         self.on_prop(e["name"], e["data"])
@@ -3736,7 +3748,9 @@ class Streamer:
 # ──────────────────────────────────────────────────────────────────────────────
 
 VOL_MAX = 130           # volume-max implicit în mpv
-VOL_WHEEL_STEP = 5      # procente de volum la fiecare „clic” al rotiței de mouse de pe video
+VOL_WHEEL_STEP = 5      # procente de volum la fiecare „clic” al rotiței de mouse de pe video (și la o apăsare de ←/→)
+VOL_HOLD_STEP = 1       # tasta ←/→ ținută apăsată: +/- atâtea procente la fiecare VOL_HOLD_PERIOD secunde
+VOL_HOLD_PERIOD = 0.1   # (1% la 0,1 s = 5% la jumătate de secundă = 10% pe secundă)
 # Paletă Dark / Slate Hi-Fi (din darkmode.py), asortată cu rotițele retro, grila de difuzor și LED-urile portocalii.
 # Tema luminoasă este aspectul original: nu are culori proprii aici, folosește implicitele Tk/ttk.
 BG_SLATE = "#2b2d30"       # fundal principal (panou, listă, câmpuri)
@@ -6024,19 +6038,37 @@ class Main:
         self._btn(tc, "side_btn", self.swap_side)
         self.rec_tip = Tip(self._btn(tc, "rec_dir", self.choose_rec_dir), str(self.rec_dir))
         self.reset_tip = Tip(self._btn(tc, "reset_btn", self.reset_program), "", wrap=320)
+        thr = ttk.Frame(tc)
+        thr.pack(fill="x", pady=(5, 0))
+        thl = ttk.Label(thr)
+        thl.pack(side="left", padx=(0, 8))
+        self.tr.append((thl, "theme_label"))
+        self.theme_box = ttk.Combobox(thr, state="readonly", font=self.f_norm)
+        self.theme_box.pack(side="left", fill="x", expand=True)
+        self.theme_box.bind("<<ComboboxSelected>>", self.on_theme)
         self.borderless_var = tk.BooleanVar(value=bool(self.settings.get("borderless", False)))
         cb = ttk.Checkbutton(tc, variable=self.borderless_var, command=self.apply_borderless)
         cb.pack(fill="x", pady=(5, 0))
         self.tr.append((cb, "borderless"))
-        self.autoplay_var = tk.BooleanVar(value=bool(self.settings.get("autoplay_last", False)))
-        cb2 = ttk.Checkbutton(tc, variable=self.autoplay_var)
-        cb2.pack(fill="x", pady=(5, 0))
-        self.tr.append((cb2, "autoplay_last"))
-        self.fast_var = tk.BooleanVar(value=bool(self.settings.get("fast_switch", True)))
-        cb3 = ttk.Checkbutton(tc, variable=self.fast_var)
-        cb3.pack(fill="x", pady=(5, 0))
-        self.tr.append((cb3, "fast_switch"))
-        self.fast_tip = Tip(cb3, "", wrap=300)
+        self.topmost_var = tk.BooleanVar(value=bool(self.settings.get("always_on_top", False)))
+        cbt = ttk.Checkbutton(tc, variable=self.topmost_var, command=self.apply_topmost)
+        cbt.pack(fill="x", pady=(5, 0))
+        self.tr.append((cbt, "always_on_top"))
+        ttk.Separator(tc, orient="horizontal").pack(fill="x", pady=(5, 0))
+        self.show_media_var = tk.BooleanVar(value=bool(self.settings.get("show_media", True)))
+        cb4 = ttk.Checkbutton(tc, variable=self.show_media_var, command=self.on_toggle_media)
+        cb4.pack(fill="x", pady=(5, 0))
+        self.tr.append((cb4, "show_media"))
+        cr = ttk.Frame(tc)
+        cr.pack(fill="x", pady=(5, 0))
+        cl = ttk.Label(cr)
+        cl.pack(side="left", padx=(0, 8))
+        self.tr.append((cl, "country_label"))
+        self.country_box = ttk.Combobox(cr, state="readonly", font=self.f_norm)
+        self.country_box.pack(side="left", fill="x", expand=True)
+        self.country_box.bind("<<ComboboxSelected>>", self.on_country)
+        self.country_tip = Tip(self.country_box, "", wrap=300)
+        ttk.Separator(tc, orient="horizontal").pack(fill="x", pady=(5, 0))
         self.ts_var = tk.BooleanVar(value=bool(self.settings.get("timeshift", False)))
         cb5 = ttk.Checkbutton(tc, variable=self.ts_var, command=self.on_timeshift)
         cb5.pack(fill="x", pady=(5, 0))
@@ -6067,29 +6099,17 @@ class Main:
         self.ts_box.bind("<<ComboboxSelected>>", self.on_timeshift)
         self._combos.append(self.ts_box)
         self._sync_ts_box()
-        self.show_media_var = tk.BooleanVar(value=bool(self.settings.get("show_media", True)))
-        cb4 = ttk.Checkbutton(tc, variable=self.show_media_var, command=self.on_toggle_media)
-        cb4.pack(fill="x", pady=(5, 0))
-        self.tr.append((cb4, "show_media"))
-        cr = ttk.Frame(tc)
-        cr.pack(fill="x", pady=(5, 0))
-        cl = ttk.Label(cr)
-        cl.pack(side="left", padx=(0, 8))
-        self.tr.append((cl, "country_label"))
-        self.country_box = ttk.Combobox(cr, state="readonly", font=self.f_norm)
-        self.country_box.pack(side="left", fill="x", expand=True)
-        self.country_box.bind("<<ComboboxSelected>>", self.on_country)
-        self.country_tip = Tip(self.country_box, "", wrap=300)
-        thr = ttk.Frame(tc)
-        thr.pack(fill="x", pady=(5, 0))
-        thl = ttk.Label(thr)
-        thl.pack(side="left", padx=(0, 8))
-        self.tr.append((thl, "theme_label"))
-        self.theme_box = ttk.Combobox(thr, state="readonly", font=self.f_norm)
-        self.theme_box.pack(side="left", fill="x", expand=True)
-        self.theme_box.bind("<<ComboboxSelected>>", self.on_theme)
+        ttk.Separator(tc, orient="horizontal").pack(fill="x", pady=(5, 0))
+        self.autoplay_var = tk.BooleanVar(value=bool(self.settings.get("autoplay_last", False)))
+        cb2 = ttk.Checkbutton(tc, variable=self.autoplay_var)
+        cb2.pack(fill="x", pady=(5, 0))
+        self.tr.append((cb2, "autoplay_last"))
+        self.fast_var = tk.BooleanVar(value=bool(self.settings.get("fast_switch", True)))
+        cb3 = ttk.Checkbutton(tc, variable=self.fast_var)
+        cb3.pack(fill="x", pady=(5, 0))
+        self.tr.append((cb3, "fast_switch"))
+        self.fast_tip = Tip(cb3, "", wrap=300)
         self._combos += [self.lang_box, self.country_box, self.theme_box]
-
         self.epg_lbl = box = ttk.Frame(main)
         box.pack(fill="x", pady=5)
         self.epg_k = [ttk.Label(box, style="EpgB.TLabel") for _ in range(2)]
@@ -6223,6 +6243,8 @@ class Main:
         root.after(40, self.chrome.start_mpv_poll)
         if self.borderless_var.get():
             root.after(400, self.apply_borderless)
+        if self.topmost_var.get():
+            root.after(300, self.apply_topmost)
         self.layout()
         self.apply_theme()
         threading.Thread(target=mpv_options, args=(self.mpv_cmd,), daemon=True).start()
@@ -6766,6 +6788,15 @@ class Main:
             self.open_jump()
         elif msg in ("vol-up", "vol-down"):
             self.wheel_volume(VOL_WHEEL_STEP if msg == "vol-up" else -VOL_WHEEL_STEP)
+        elif msg.startswith("vol-key:"):
+            _, d, rep = msg.split(":")
+            sign, now = (1 if d == "up" else -1), time.monotonic()
+            if rep != "1":                  # apăsare nouă: pasul obișnuit
+                self._vol_hold_t = now
+                self.wheel_volume(sign * VOL_WHEEL_STEP)
+            elif now - getattr(self, "_vol_hold_t", 0.0) >= VOL_HOLD_PERIOD:     # ținută apăsat: ritm fix
+                self._vol_hold_t = now
+                self.wheel_volume(sign * VOL_HOLD_STEP)
         elif msg in ("ch-up", "ch-down"):
             self.pick_step(1 if msg == "ch-up" else -1)
         elif msg == "ch-enter":
@@ -6774,6 +6805,30 @@ class Main:
             self.pick_abort()
 
     # ---- mutarea ferestrei prin tragere (fără titlebar)
+
+    def apply_topmost(self):
+        """Always on top: fereastra rămâne deasupra celorlalte, și peste cele fullscreen (reafirmat periodic)."""
+        on = bool(self.topmost_var.get())
+        try:
+            self.root.attributes("-topmost", on)
+            if on:
+                self.root.lift()
+        except tk.TclError:
+            pass
+        if on and getattr(self, "_topmost_job", None) is None:
+            self._topmost_job = self.root.after(1000, self._topmost_poll)
+
+    def _topmost_poll(self):
+        self._topmost_job = None
+        if not self.topmost_var.get() or getattr(self, "_closing", False):
+            return
+        try:
+            self.root.attributes("-topmost", True)
+            if not any(isinstance(w, tk.Toplevel) for w in self.root.winfo_children()):    # nu acoperim dialogurile deschise
+                self.root.lift()
+        except tk.TclError:
+            pass
+        self._topmost_job = self.root.after(1000, self._topmost_poll)
 
     def apply_borderless(self):
         if not self.chrome.set_borderless(self.borderless_var.get()):
@@ -7830,6 +7885,7 @@ class Main:
             "geometry": self._pre_fs_geom if self.fullscreen and self._pre_fs_geom else self.root.geometry(),
             "video_side": self.video_side,
             "borderless": bool(self.borderless_var.get()),
+            "always_on_top": bool(self.topmost_var.get()),
             "autoplay_last": bool(self.autoplay_var.get()),
             "tmdb_key": self.settings.get("tmdb_key", ""),
             "country": self.settings.get("country", ""),
